@@ -1,4 +1,4 @@
-# Lambdaplex 50/50 Vault Contracts
+# Lambdaplex Balanced Vault
 
 Solidity smart contracts for the Lambdaplex “pair vault” system on Hedera EVM:
 - **`PLEXPairVault`** — single BASE/QUOTE vault with share-based accounting, inventory-aware deposits/withdrawals, streaming airdrop rewards, management fee accrual via share-minting, and emergency mode.
