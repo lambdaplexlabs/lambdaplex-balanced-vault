@@ -1,0 +1,11 @@
+node_modules/
+.env
+yarn.lock
+artifacts/
+cache/
+typechain/
+typechain-types/
+.DS_Store
+package-lock.json
+.mocharc.json
+.vscode
