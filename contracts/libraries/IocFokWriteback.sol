@@ -43,7 +43,7 @@ library IocFokWriteback {
                     detailWord.numerator(),
                     detailWord.denominator(),
                     detailWord.deviation(),
-                    detailWord.minFill()
+                    0 // set minFill to zero after first valid fill
                 );
                 orders[prefixKey] = newDetail;
             }

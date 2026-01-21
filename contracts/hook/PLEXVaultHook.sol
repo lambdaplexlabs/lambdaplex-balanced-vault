@@ -24,7 +24,7 @@ contract OrderFlowAllowance is IHieroAccountAllowanceHook {
     ISupraRegistry public immutable supra = ISupraRegistry(address(0x00000000000000000000000000000000000003f7));
     IPLEXBrokerRegistry public immutable broker = IPLEXBrokerRegistry(address(0x00000000000000000000000000000000000003f9));
 
-error Fail(bytes32 prefix, string reason);
+    error Fail(bytes32 prefix, string reason);
     mapping(bytes32 => bytes32) public orders;
 
     struct BatchState {
@@ -153,6 +153,7 @@ error Fail(bytes32 prefix, string reason);
     ) private returns (uint256 factorBps) {
         ISupraRegistry.PriceInfo memory pi = supra.verifyOracleProofV2(proof);
         require(pi.pairs.length == 1, "oracle: pair length");
+        require(pi.prices[0] > 0, "oracle: price=0");
         require(
             pi.timestamp[0] <= block.timestamp &&
             pi.timestamp[0] >= block.timestamp - STALE_PRICE,
