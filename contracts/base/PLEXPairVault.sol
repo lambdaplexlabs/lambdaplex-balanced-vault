@@ -61,7 +61,7 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
         
     address public immutable ORACLE_BASE;
     address public immutable ORACLE_QUOTE;
-    uint256 constant STALE_PRICE = 60;
+    uint256 constant STALE_PRICE = 30;
 
     // Distributor that custodies reward tokens and pays on claim
     IAirdropDistributor public distributor;
