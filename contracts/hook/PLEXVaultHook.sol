@@ -46,6 +46,7 @@ contract OrderFlowAllowance is IHieroAccountAllowanceHook {
     ) external payable override returns (bool) {
         bytes memory args = context.data;
         require(args.length >= 32, "args too short");
+        require(broker.isBroker(msg.sender), 'not broker');
         _validateForCustomFee(proposedTransfers);
 
         BatchState memory st;
