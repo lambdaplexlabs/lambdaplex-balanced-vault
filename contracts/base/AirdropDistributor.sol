@@ -109,7 +109,7 @@ contract AirdropDistributor is Ownable, ReentrancyGuard {
     }
 
     function dissociateToken(address token) external onlyOwner() {
-        // Only owner may disassociate tokens
+        // Only owner may dissociate tokens
         (bool success , bytes memory result) = address(0x167).call(abi.encodeWithSignature("dissociateToken(address,address)", address(this), token));
         require(success, "HTS Precompile: CALL_EXCEPTION");
         int32 responseCode = abi.decode(result, (int32));
