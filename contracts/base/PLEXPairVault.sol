@@ -77,6 +77,9 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
     uint256 public constant BPS = 1_000_000; // 1e6 = 100%
     uint64 public constant WEEK_SECS = 7 days;
 
+    /* ── Max reward token to prevent unbounded array growth ── */
+    uint256 public constant MAX_REWARD_TOKENS = 30;
+
     /* ── Shares (global) ── */
     uint256 public totalShares;
     mapping(address => uint256) public userShares;
@@ -477,6 +480,7 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
     function _ensureListedReward(address rt) internal {
         for (uint i = 0; i < rewardTokens.length; i++)
             if (rewardTokens[i] == rt) return;
+        require(rewardTokens.length <= MAX_REWARD_TOKENS, "too many reward tokens");
         rewardTokens.push(rt);
     }
 
