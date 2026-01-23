@@ -480,7 +480,7 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
     function _ensureListedReward(address rt) internal {
         for (uint i = 0; i < rewardTokens.length; i++)
             if (rewardTokens[i] == rt) return;
-        require(rewardTokens.length <= MAX_REWARD_TOKENS, "too many reward tokens");
+        require(rewardTokens.length < MAX_REWARD_TOKENS, "too many reward tokens");
         rewardTokens.push(rt);
     }
 
