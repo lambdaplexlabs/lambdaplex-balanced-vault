@@ -80,6 +80,10 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
     /* ── Max reward token to prevent unbounded array growth ── */
     uint256 public constant MAX_REWARD_TOKENS = 30;
 
+    /* ── Donation/inflation mitigation (ERC4626-style virtual offset) ── */
+    uint256 private constant VIRTUAL_SHARES = 1e3;
+    uint256 private constant VIRTUAL_VALUEQ = 1;
+
     /* ── Shares (global) ── */
     uint256 public totalShares;
     mapping(address => uint256) public userShares;
@@ -391,6 +395,25 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
         }
     }
 
+    /* ───────────────────────── Virtual share helpers ───────────────────────── */
+    function _valueQToShares(uint256 valueQ, uint256 tvlQ, uint256 supply)
+        internal
+        pure
+        returns (uint256)
+    {
+        // shares = valueQ * (supply + VIRTUAL_SHARES) / (tvlQ + VIRTUAL_VALUEQ)
+        return PRBMathCommon.mulDiv(valueQ, supply + VIRTUAL_SHARES, tvlQ + VIRTUAL_VALUEQ);
+    }
+
+    function _sharesToValueQ(uint256 shares, uint256 tvlQ, uint256 supply)
+        internal
+        pure
+        returns (uint256)
+    {
+        // valueQ = shares * (tvlQ + VIRTUAL_VALUEQ) / (supply + VIRTUAL_SHARES)
+        return PRBMathCommon.mulDiv(shares, tvlQ + VIRTUAL_VALUEQ, supply + VIRTUAL_SHARES);
+    }
+
     /// @dev True if |imbalance| <= tolerance * TVL.
     function _isBalanced(
         uint256 tvlQ,
@@ -687,8 +710,9 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
             int256 imb
         ) = _inventoryValues(price, scale);
 
+        uint256 tsBefore = totalShares;
         // Pro-rata value owed (QUOTE terms)
-        uint256 valueOutQ = (tvlQ * shares) / totalShares; // or Math.mulDiv(tvlQ, shares, totalShares)
+        uint256 valueOutQ = _sharesToValueQ(shares, tvlQ, tsBefore);
 
         // One source of truth: handles both balanced & imbalanced
         return
@@ -864,7 +888,6 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
     ) external payable nonReentrant returns(uint256) {
         require(!emergencyMode, "emergency: deposits disabled");
         _accrueMgmtFee(); // checkpoint fee‑shares first
-
         (uint256 price, uint256 scale) = _getPriceAndScale(supraArgs);
 
         // Preview what we will accept right now
@@ -916,10 +939,10 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
         // Settle rewards for user before mutating (rewards accrue immediately)
         _settleRewards(msg.sender);
 
-        // Mint shares
-        uint256 sh = (totalShares == 0 || tvlQBefore == 0)
-            ? principalQ
-            : (principalQ * totalShares) / tvlQBefore;
+        uint256 supplyBefore = totalShares;
+
+        // Mint shares using virtual offset mitigation
+        uint256 sh = _valueQToShares(principalQ, tvlQBefore, supplyBefore);
         require(sh > 0, "shares=0");
         require(sh <= type(uint96).max, "shares overflow");
 
@@ -956,7 +979,7 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
     _accrueMgmtFee(); // checkpoint fee‑shares first
 
     Deposit storage d = deposits[depositId];
-    address user = d.user;                                 // <-- capture early
+    address user = d.user;
     require(user == msg.sender, "not owner");
     require(d.state == uint8(DepState.ACTIVE), "withdrawn");
     require(block.timestamp >= d.lockupUntil, "locked");
@@ -974,7 +997,7 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
     (uint256 baseBal, uint256 quoteBal, , , uint256 tvlQ, int256 imb)
         = _inventoryValues(price, scale);
 
-    uint256 valueOutQ = (tvlQ * sh) / tsBefore;
+    uint256 valueOutQ = _sharesToValueQ(sh, tvlQ, tsBefore);
 
     (uint256 payBase, uint256 payQuote) = _payoutOverweightThenBalanced(
         valueOutQ, price, scale, baseBal, quoteBal, imb
@@ -1040,7 +1063,7 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
         ) = _inventoryValues(price, scale);
 
         // Value owed (QUOTE terms)
-        uint256 valueOutQ = (tvlQ * burn) / tsBefore;
+        uint256 valueOutQ = _sharesToValueQ(burn, tvlQ, tsBefore);
 
         // Compute payout per policy (handles both imbalanced and balanced)
         (uint256 payBase, uint256 payQuote) = _payoutOverweightThenBalanced(

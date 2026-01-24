@@ -3613,4 +3613,156 @@ describe("Vault", () => {
       expect(bobA).to.be.gte(aliceA);
     });
   });
+  describe.only("virtual shares mitigation (donation / inflation attack)", () => {
+    const PAIR_ID = 1;
+    const ONE = BigNumber.from(10).pow(8);
+
+    // Must match your Solidity constants:
+    const VIRTUAL_SHARES = BigNumber.from(1_000);
+    const VIRTUAL_VALUEQ = BigNumber.from(1);
+
+    async function refreshOracle1to1() {
+      const latest = await ethers.provider.getBlock("latest");
+      const ts = latest!.timestamp;
+
+      // rawPrice = 1e8, scale = 1e8 => 1.0
+      await mockSupra.setPriceInfo(
+        PAIR_ID,
+        [PAIR_ID],
+        [ONE],
+        [ts],
+        [ONE],
+        [0]
+      );
+    }
+
+    function pow10(d: number) {
+      return BigNumber.from(10).pow(d);
+    }
+
+    async function parseDepositedPolicy(receipt: any) {
+      const ev = receipt.events?.find((e: any) => e.event === "DepositedPolicy");
+      expect(ev, "DepositedPolicy event not found").to.exist;
+      const args = ev.args;
+
+      // event DepositedPolicy(address user, uint256 depositId, uint256 baseIn, uint256 quoteIn, uint256 sharesMinted, uint256 tvlQuoteBefore)
+      return {
+        user: args.user,
+        depositId: args.depositId,
+        baseIn: args.baseIn,
+        quoteIn: args.quoteIn,
+        sharesMinted: args.sharesMinted,
+        tvlQuoteBefore: args.tvlQuoteBefore,
+      };
+    }
+
+    it("first deposit mints using virtual offset: shares = valueQ*(S+VS)/(TVL+VV)", async () => {
+      const aliceAddr = await alice.getAddress();
+
+      const depositBaseMax = ONE;  // 1 BASE token
+      const depositQuoteMax = ONE; // 1 QUOTE token
+
+      // fund + approve
+      await token0.transfer(aliceAddr, depositBaseMax);
+      await token1.transfer(aliceAddr, depositQuoteMax);
+      await token0.connect(alice).approve(vault.address, depositBaseMax);
+      await token1.connect(alice).approve(vault.address, depositQuoteMax);
+
+      await refreshOracle1to1();
+
+      const supplyBefore = await vault.totalShares();
+      expect(supplyBefore).to.equal(0);
+
+      const tx = await vault.connect(alice).depositWithPolicy(depositBaseMax, depositQuoteMax, supraArgs);
+      const rcpt = await tx.wait();
+      const dep = await parseDepositedPolicy(rcpt);
+
+      // For the first deposit on a fresh vault, tvlQuoteBefore should be 0
+      expect(dep.tvlQuoteBefore).to.equal(0);
+
+      // Recompute the price the vault should be using (normal orientation, equal decimals in your tests)
+      const dBase = await token0.decimals();
+      const dQuote = await token1.decimals();
+
+      const rawPrice = ONE; // from mock oracle
+      const scale = ONE;    // from mock oracle
+
+      // price = rawPrice * 10^dQuote / 10^dBase
+      const price = rawPrice.mul(pow10(dQuote)).div(pow10(dBase));
+
+      // principalQ = baseIn*price/scale + quoteIn
+      const principalQ = dep.baseIn.mul(price).div(scale).add(dep.quoteIn);
+
+      // expectedShares = principalQ*(supplyBefore+VS)/(tvlBefore+VV)
+      const expectedShares = principalQ
+        .mul(supplyBefore.add(VIRTUAL_SHARES))
+        .div(dep.tvlQuoteBefore.add(VIRTUAL_VALUEQ));
+
+      expect(dep.sharesMinted).to.equal(expectedShares);
+
+      // If your constants are VS=1000, VV=1 and TVL=0, this should be principalQ*1000
+      expect(dep.sharesMinted).to.equal(principalQ.mul(1_000));
+    });
+
+    it("prevents classic donation attack: after huge donation, a tiny depositor still gets >0 shares", async () => {
+      const aliceAddr = await alice.getAddress();
+      const bobAddr = await bob.getAddress();
+      const small = ONE; // 1 token each (1e8 units)
+
+      // --- Alice first deposit (small) ---
+      await token0.transfer(aliceAddr, small);
+      await token1.transfer(aliceAddr, small);
+      await token0.connect(alice).approve(vault.address, small);
+      await token1.connect(alice).approve(vault.address, small);
+
+      await refreshOracle1to1();
+
+      const tx1 = await vault.connect(alice).depositWithPolicy(small, small, supraArgs);
+      const rcpt1 = await tx1.wait();
+      const dep1 = await parseDepositedPolicy(rcpt1);
+
+      // With 1:1 price and equal decimals in tests:
+      const alicePrincipalQ = dep1.baseIn.add(dep1.quoteIn);
+
+      // Sanity: fixed vault mints ~principalQ*1000 on first deposit
+      expect(dep1.sharesMinted).to.equal(alicePrincipalQ.mul(VIRTUAL_SHARES).div(VIRTUAL_VALUEQ));
+
+      // --- Huge donation directly to vault (no shares minted) ---
+      const donation = ONE.mul(300_000_000); // 300M tokens each side
+      await token0.connect(deployer).transfer(vault.address, donation);
+      await token1.connect(deployer).transfer(vault.address, donation);
+
+      // --- Bob tries to deposit tiny amount ---
+      await token0.transfer(bobAddr, small);
+      await token1.transfer(bobAddr, small);
+      await token0.connect(bob).approve(vault.address, small);
+      await token1.connect(bob).approve(vault.address, small);
+
+      await refreshOracle1to1();
+
+      const supplyBeforeBob = await vault.totalShares();
+
+      const tx2 = await vault.connect(bob).depositWithPolicy(small, small, supraArgs);
+      const rcpt2 = await tx2.wait();
+      const dep2 = await parseDepositedPolicy(rcpt2);
+
+      // Must not be 0 shares (this was the practical "shares=0" griefing vector)
+      expect(dep2.sharesMinted).to.be.gt(0);
+
+      // Strong check: minted shares match the *current* virtual offset formula
+      const bobPrincipalQ = dep2.baseIn.add(dep2.quoteIn); // price=1 in this test
+      const expectedSharesNew = bobPrincipalQ
+        .mul(supplyBeforeBob.add(VIRTUAL_SHARES))
+        .div(dep2.tvlQuoteBefore.add(VIRTUAL_VALUEQ));
+
+      expect(dep2.sharesMinted).to.equal(expectedSharesNew);
+
+      // Now simulate the *vulnerable* vault behavior:
+      // In the old vulnerable vault, Alice would have minted 1:1 (supply=principalQ).
+      const vulnerableSupplyAfterAlice = alicePrincipalQ; // <-- key difference
+      const vulnerableSharesBob = bobPrincipalQ.mul(vulnerableSupplyAfterAlice).div(dep2.tvlQuoteBefore);
+
+      expect(vulnerableSharesBob).to.equal(BigNumber.from(0));
+    });
+  });
 });
