@@ -972,55 +972,55 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
     ///         - If imbalanced: pays from overweight token first (fallback to the other).
     ///         - If balanced: pays 50/50 by value.
     function withdrawFromDeposit(
-    uint256 depositId,
-    uint256 sharesToBurn,
-    bytes memory supraArgs
-) public nonReentrant {
-    _accrueMgmtFee(); // checkpoint fee‑shares first
+        uint256 depositId,
+        uint256 sharesToBurn,
+        bytes memory supraArgs
+    ) public nonReentrant {
+        _accrueMgmtFee(); // checkpoint fee‑shares first
 
-    Deposit storage d = deposits[depositId];
-    address user = d.user;
-    require(user == msg.sender, "not owner");
-    require(d.state == uint8(DepState.ACTIVE), "withdrawn");
-    require(block.timestamp >= d.lockupUntil, "locked");
-    require(sharesToBurn > 0 && sharesToBurn <= uint256(d.shares), "bad shares");
+        Deposit storage d = deposits[depositId];
+        address user = d.user;
+        require(user == msg.sender, "not owner");
+        require(d.state == uint8(DepState.ACTIVE), "withdrawn");
+        require(block.timestamp >= d.lockupUntil, "locked");
+        require(sharesToBurn > 0 && sharesToBurn <= uint256(d.shares), "bad shares");
 
-    // Settle streaming rewards before burning shares
-    _settleRewards(user);
+        // Settle streaming rewards before burning shares
+        _settleRewards(user);
 
-    uint256 sh = sharesToBurn;
-    uint256 tsBefore = totalShares;
-    require(tsBefore >= sh, "supply");
+        uint256 sh = sharesToBurn;
+        uint256 tsBefore = totalShares;
+        require(tsBefore >= sh, "supply");
 
-    (uint256 price, uint256 scale) = _getPriceAndScale(supraArgs);
+        (uint256 price, uint256 scale) = _getPriceAndScale(supraArgs);
 
-    (uint256 baseBal, uint256 quoteBal, , , uint256 tvlQ, int256 imb)
-        = _inventoryValues(price, scale);
+        (uint256 baseBal, uint256 quoteBal, , , uint256 tvlQ, int256 imb)
+            = _inventoryValues(price, scale);
 
-    uint256 valueOutQ = _sharesToValueQ(sh, tvlQ, tsBefore);
+        uint256 valueOutQ = _sharesToValueQ(sh, tvlQ, tsBefore);
 
-    (uint256 payBase, uint256 payQuote) = _payoutOverweightThenBalanced(
-        valueOutQ, price, scale, baseBal, quoteBal, imb
-    );
+        (uint256 payBase, uint256 payQuote) = _payoutOverweightThenBalanced(
+            valueOutQ, price, scale, baseBal, quoteBal, imb
+        );
 
-    // Burn shares
-    d.shares = uint96(uint256(d.shares) - sh);
-    totalShares = tsBefore - sh;
-    uint256 us = userShares[user];
-    userShares[user] = us >= sh ? (us - sh) : 0;
+        // Burn shares
+        d.shares = uint96(uint256(d.shares) - sh);
+        totalShares = tsBefore - sh;
+        uint256 us = userShares[user];
+        userShares[user] = us >= sh ? (us - sh) : 0;
 
-    // If lot emptied, mark withdrawn and recycle
-    if (d.shares == 0) {
-        d.state = uint8(DepState.WITHDRAWN);
-        _removeUserDeposit(user, depositId);
-        _deleteDeposit(depositId);
+        // If lot emptied, mark withdrawn and recycle
+        if (d.shares == 0) {
+            d.state = uint8(DepState.WITHDRAWN);
+            _removeUserDeposit(user, depositId);
+            _deleteDeposit(depositId);
+        }
+
+        _transferOut(BASE,  payable(user), payBase);
+        _transferOut(QUOTE, payable(user), payQuote);
+
+        emit WithdrawalFinalized(depositId, user, payBase, payQuote);
     }
-
-    _transferOut(BASE,  payable(user), payBase);
-    _transferOut(QUOTE, payable(user), payQuote);
-
-    emit WithdrawalFinalized(depositId, user, payBase, payQuote);
-}
 
     /// @notice Convenience: withdraw the entire lot.
     function withdrawAllFromDeposit(
@@ -1215,45 +1215,45 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
     ///         portions of BASE and QUOTE currently held by the vault (no oracle).
     ///         Ignores lockup and inventory policy. Available only when emergencyMode == true.
     function emergencyWithdrawFromDeposit(uint256 depositId) public nonReentrant {
-    require(emergencyMode, "emergency: disabled");
+        require(emergencyMode, "emergency: disabled");
 
-    Deposit storage d = deposits[depositId];
-    address user = d.user;                              // <-- capture before any delete
-    require(user == msg.sender, "not owner");
-    require(d.state == uint8(DepState.ACTIVE), "withdrawn");
-    uint256 sh = d.shares;
-    require(sh > 0, "no shares");
+        Deposit storage d = deposits[depositId];
+        address user = d.user;                              // <-- capture before any delete
+        require(user == msg.sender, "not owner");
+        require(d.state == uint8(DepState.ACTIVE), "withdrawn");
+        uint256 sh = d.shares;
+        require(sh > 0, "no shares");
 
-    // Keep accounting current (both are oracle-free)
-    _accrueMgmtFee();
-    _settleRewards(user);
+        // Keep accounting current (both are oracle-free)
+        _accrueMgmtFee();
+        _settleRewards(user);
 
-    uint256 tsBefore = totalShares;
-    require(tsBefore >= sh, "supply");
+        uint256 tsBefore = totalShares;
+        require(tsBefore >= sh, "supply");
 
-    // Snapshot balances and compute per-token pro-rata
-    uint256 baseBal  = _vaultBalance(BASE);
-    uint256 quoteBal = _vaultBalance(QUOTE);
-    uint256 baseOut  = (baseBal  * sh) / tsBefore;
-    uint256 quoteOut = (quoteBal * sh) / tsBefore;
+        // Snapshot balances and compute per-token pro-rata
+        uint256 baseBal  = _vaultBalance(BASE);
+        uint256 quoteBal = _vaultBalance(QUOTE);
+        uint256 baseOut  = (baseBal  * sh) / tsBefore;
+        uint256 quoteOut = (quoteBal * sh) / tsBefore;
 
-    // Burn user's shares and update totals
-    d.shares = 0;
-    d.state  = uint8(DepState.WITHDRAWN);
-    totalShares = tsBefore - sh;
-    uint256 us = userShares[d.user];
-    userShares[d.user] = us >= sh ? (us - sh) : 0;
+        // Burn user's shares and update totals
+        d.shares = 0;
+        d.state  = uint8(DepState.WITHDRAWN);
+        totalShares = tsBefore - sh;
+        uint256 us = userShares[d.user];
+        userShares[d.user] = us >= sh ? (us - sh) : 0;
 
-    // Remove from user's list and delete the record permanently
-    _removeUserDeposit(d.user, depositId);
-    _deleteDeposit(depositId);
+        // Remove from user's list and delete the record permanently
+        _removeUserDeposit(d.user, depositId);
+        _deleteDeposit(depositId);
 
-    // Payout (HBAR / ERC20)
-    _transferOut(BASE,  payable(user), baseOut);       // <-- use local
-    _transferOut(QUOTE, payable(user), quoteOut);
+        // Payout (HBAR / ERC20)
+        _transferOut(BASE,  payable(user), baseOut);       // <-- use local
+        _transferOut(QUOTE, payable(user), quoteOut);
 
-    emit WithdrawalFinalized(depositId, user, baseOut, quoteOut);
-}
+        emit WithdrawalFinalized(depositId, user, baseOut, quoteOut);
+    }
 
     /// @notice Emergency redemption of already‑accrued owner fee‑shares for per‑token pro‑rata.
     ///         Available only when emergencyMode == true.

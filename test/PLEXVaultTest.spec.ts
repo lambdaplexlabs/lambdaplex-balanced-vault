@@ -3613,7 +3613,7 @@ describe("Vault", () => {
       expect(bobA).to.be.gte(aliceA);
     });
   });
-  describe.only("virtual shares mitigation (donation / inflation attack)", () => {
+  describe("virtual shares mitigation (donation / inflation attack)", () => {
     const PAIR_ID = 1;
     const ONE = BigNumber.from(10).pow(8);
 
