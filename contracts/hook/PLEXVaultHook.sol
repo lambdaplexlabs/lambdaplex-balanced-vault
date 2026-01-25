@@ -13,7 +13,7 @@ import '../libraries/PRBMathCommon.sol';
 import '../libraries/PrefixDecoder.sol';
 import '../interfaces/ISupraRegistry.sol';
 
-contract OrderFlowAllowance is IHieroAccountAllowanceHook {
+contract PLEXVaultHook is IHieroAccountAllowanceHook {
     using SafeERC20 for IERC20;
     using DetailDecoder for uint256;
     using PrefixDecoder for uint256;
