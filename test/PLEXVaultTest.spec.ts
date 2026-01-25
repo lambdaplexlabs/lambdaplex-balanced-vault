@@ -3,6 +3,7 @@ import { expect } from "chai";
 import { ethers, network } from "hardhat";
 import { BigNumber, Signer } from "ethers";
 import { AirdropDistributor, ERC20Mock, MockSupraPriceFeed, PLEXPairVault, SupraRegistry } from "../typechain-types";
+import { anyValue } from "@nomicfoundation/hardhat-chai-matchers/withArgs";
 
 describe("Vault", () => {
   let deployer: Signer;
@@ -2436,6 +2437,93 @@ describe("Vault", () => {
       // 3) Alice gets more of each reward token than Bob (since she has more shares)
       expect(a_deltaA.gt(b_deltaA)).to.be.true;
       expect(a_deltaB.gt(b_deltaB)).to.be.true;
+    });
+    it("claimAllRewards does not revert if one reward token claim fails; emits RewardClaimFailed and keeps accrued intact", async () => {
+      const [, aliceSigner] = await ethers.getSigners();
+      const aliceAddr = await aliceSigner.getAddress();
+
+      const ONE = BigNumber.from(10).pow(8);
+      const depositAmt = ONE.mul(1_000);
+
+      // --- Alice deposits so she has eligible shares ---
+      await token0.transfer(aliceAddr, depositAmt);
+      await token1.transfer(aliceAddr, depositAmt);
+      await token0.connect(aliceSigner).approve(vault.address, depositAmt);
+      await token1.connect(aliceSigner).approve(vault.address, depositAmt);
+
+      await vault.connect(aliceSigner).depositWithPolicy(depositAmt, depositAmt, supraArgs);
+
+      // --- Deploy a GOOD reward token (normal ERC20Mock) ---
+      const ERC20MockFactory = await ethers.getContractFactory("ERC20Mock");
+      const goodReward = (await ERC20MockFactory.deploy(
+        "GoodReward",
+        "GOOD",
+        8,
+        INITIAL_MINT
+      )) as ERC20Mock;
+      await goodReward.deployed();
+
+      // --- Deploy a BAD reward token that fails on transfer() when Distributor calls it ---
+      const BadRewardTokenFactory = await ethers.getContractFactory("BadRewardToken");
+      const badReward = await BadRewardTokenFactory.deploy(
+        "BadReward",
+        "BAD",
+        8,
+        distributor.address,              // blockedSender = distributor
+        ethers.utils.parseUnits("1000000000", 8) // mint plenty to deployer
+      );
+      await badReward.deployed();
+
+      // If your distributor enforces allow-listing, allow these tokens
+      // (remove these two lines if your distributor doesn't have modifyAllowed)
+      await distributor.modifyAllowed(goodReward.address, true);
+      await distributor.modifyAllowed(badReward.address, true);
+
+      // --- Fund BOTH reward tokens (so vault lists them + starts streams) ---
+      const rewardAmount = ONE.mul(1_000_000); // 1,000,000 tokens (1e14 units at 8 decimals)
+
+      await goodReward.approve(distributor.address, rewardAmount);
+      await distributor.fund(vault.address, goodReward.address, rewardAmount);
+
+      await badReward.approve(distributor.address, rewardAmount);
+      await distributor.fund(vault.address, badReward.address, rewardAmount);
+
+      // Let rewards accrue so claim amounts are > 0
+      await increaseTime(DAY_SECS); // 1 day
+
+      // sanity: Alice has 0 reward balances before claim
+      expect(await goodReward.balanceOf(aliceAddr)).to.equal(0);
+      expect(await badReward.balanceOf(aliceAddr)).to.equal(0);
+
+      // --- claimAllRewards should NOT revert ---
+      const tx = await vault.connect(aliceSigner).claimAllRewards();
+
+      // One succeeds
+      await expect(tx)
+        .to.emit(vault, "RewardClaimed")
+        .withArgs(goodReward.address, aliceAddr, anyValue);
+
+      // One fails gracefully
+      await expect(tx)
+        .to.emit(vault, "RewardClaimFailed")
+        .withArgs(badReward.address, aliceAddr, anyValue);
+
+      await tx.wait();
+
+      // Alice actually received GOOD rewards
+      expect(await goodReward.balanceOf(aliceAddr)).to.be.gt(0);
+
+      // Alice received ZERO BAD rewards because distributor->transfer() failed
+      expect(await badReward.balanceOf(aliceAddr)).to.equal(0);
+
+      // After claimAllRewards:
+      // - GOOD accrued should be cleared
+      // - BAD accrued should remain for retry
+      const goodState = await vault.userRewards(aliceAddr, goodReward.address);
+      const badState = await vault.userRewards(aliceAddr, badReward.address);
+
+      expect(goodState.accrued).to.equal(0);
+      expect(badState.accrued).to.be.gt(0);
     });
     describe("airdrop rewards: onAirdropFunded access control & input sanity", () => {
       it("reverts if called by a non‑distributor", async () => {

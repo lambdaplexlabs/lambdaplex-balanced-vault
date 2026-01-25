@@ -193,6 +193,11 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
         address indexed user,
         uint256 amount
     );
+    event RewardClaimFailed(
+        address indexed rewardToken, 
+        address indexed user, 
+        uint256 amount
+    );
 
     constructor(
         address base_,
@@ -638,13 +643,16 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
             UserReward storage U = userRewards[msg.sender][rt];
             uint256 amt = U.accrued;
             if (amt > 0) {
-                U.accrued = 0;
-                distributor.claimTo(rt, msg.sender, amt);
-                emit RewardClaimed(rt, msg.sender, amt);
+                try distributor.claimTo(rt, msg.sender, amt) {
+                    U.accrued = 0;
+                    emit RewardClaimed(rt, msg.sender, amt);
+                } catch {
+                    emit RewardClaimFailed(rt, msg.sender, amt);
+                // Leave U.accrued intact for retry via claimRewards(rt)
+                }
             }
         }
     }
-
     /* ───────────────────────── Views ───────────────────────── */
 
     function depositsLength() external view returns (uint256) {
