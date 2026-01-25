@@ -2,6 +2,7 @@
 pragma solidity ^0.8.24;
 
 import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import "../libraries/PRBMathCommon.sol";
 import "../interfaces/IERC20.sol";
 import "../interfaces/ISupraRegistry.sol";
@@ -524,7 +525,7 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
             if (dt > 0) {
                 uint256 eligible = _eligibleShares();
                 if (eligible == 0) {
-                    R.carry += uint128(R.rate * dt);
+                    R.carry += SafeCast.toUint128(R.rate * dt);
                 } else {
                     R.perShare += (R.rate * dt * 1e18) / eligible;
                 }
@@ -590,7 +591,7 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
             // ACTIVE: keep finish, raise rate over remaining time
             uint256 remainingTime = uint256(R.periodFinish - nowU64);
             R.rate = totalToStream / remainingTime;
-            R.carry = uint128(totalToStream - R.rate * remainingTime);
+            R.carry = SafeCast.toUint128(totalToStream - R.rate * remainingTime);
             R.lastUpdate = nowU64; // finish unchanged
             emit RewardStreamConfigured(
                 rewardToken,
@@ -602,7 +603,7 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
         } else {
             // INACTIVE: start fresh 1-week stream
             R.rate = totalToStream / VESTING_SECS;
-            R.carry = uint128(totalToStream - R.rate * VESTING_SECS);
+            R.carry = SafeCast.toUint128(totalToStream - R.rate * VESTING_SECS);
             R.lastUpdate = nowU64;
             R.periodFinish = nowU64 + VESTING_SECS;
             emit RewardStreamConfigured(
