@@ -37,6 +37,12 @@ describe("Vault", () => {
     await network.provider.send("evm_mine");
   }
 
+  // for integer rounding for equality checks
+  function isWithinOne(a: BigNumber, b: BigNumber): boolean {
+    const absDiff =  a.gte(b) ? a.sub(b) : b.sub(a);
+    return absDiff <= BigNumber.from(1);
+  }
+
   beforeEach(async () => {
     [deployer, alice, bob] = await ethers.getSigners();
     const deployerAddr = await deployer.getAddress();
@@ -402,12 +408,12 @@ describe("Vault", () => {
       expect(deltaBase.add(deltaQuote)).to.be.gt(0);
 
       // 2) In a balanced inventory at price=1, payout should be 50/50 by value ⇒ equal units
-      expect(deltaBase).to.equal(deltaQuote);
+      expect(isWithinOne(deltaBase, deltaQuote)).to.eq(true);
 
       // 3) Vault should remain balanced after redemption
       const baseBalAfter = await token0.balanceOf(vault.address);
       const quoteBalAfter = await token1.balanceOf(vault.address);
-      expect(baseBalAfter).to.equal(quoteBalAfter);
+      expect(isWithinOne(baseBalAfter, quoteBalAfter)).to.eq(true);
     });
 
     it("ownerRedeemFees pays overweight token first, then 50/50 when inventory is imbalanced", async () => {
@@ -727,6 +733,10 @@ describe("Vault", () => {
       const amount1 = ethers.utils.parseUnits("1000", 8); // 1000 TK0 + 1000 TK1
       const amount2 = ethers.utils.parseUnits("2000", 8); // 2000 TK0 + 2000 TK1
 
+      // --- virtual offset constants (must match contract) ---
+      const VIRTUAL_SHARES = BigNumber.from(1_000);
+      const VIRTUAL_VALUEQ = BigNumber.from(1);
+
       // Fund & approve Alice
       await token0.transfer(aliceAddr, amount1);
       await token1.transfer(aliceAddr, amount1);
@@ -739,38 +749,55 @@ describe("Vault", () => {
       await token0.connect(bobSigner).approve(vault.address, amount2);
       await token1.connect(bobSigner).approve(vault.address, amount2);
 
-      // ---- First deposit (vault empty → TVL=0) ----
+      // ---- First deposit (vault empty → tvlQBefore=0, supplyBefore=0) ----
       // price = 1:1, so principalQ = base + quote
-      const principal1 = amount1.mul(2); // 1000 + 1000
+      const principal1 = amount1.mul(2); // 1000 + 1000 in QUOTE-units (since price=1)
+
+      // expectedShares1 = principal1 * (0 + VIRTUAL_SHARES) / (0 + VIRTUAL_VALUEQ)
+      const expectedShares1 = principal1.mul(VIRTUAL_SHARES).div(VIRTUAL_VALUEQ);
 
       await vault.connect(aliceSigner).depositWithPolicy(amount1, amount1, supraArgs);
 
       const totalSharesAfter1 = await vault.totalShares();
       const aliceShares = await vault.userShares(aliceAddr);
 
-      expect(totalSharesAfter1).to.equal(principal1);
-      expect(aliceShares).to.equal(principal1);
+      expect(totalSharesAfter1).to.equal(expectedShares1);
+      expect(aliceShares).to.equal(expectedShares1);
 
       // Also check deposit struct
       const dep0 = await vault.deposits(0);
       expect(dep0.user).to.equal(aliceAddr);
-      expect(dep0.shares).to.equal(principal1);
+      expect(dep0.shares).to.equal(expectedShares1);
 
       // ---- Second deposit (vault already balanced) ----
-      // TVL (QUOTE terms) before Bob's deposit = principal1
-      // principalQ2 = amount2 + amount2 = 4000
-      // minted2 = principalQ2 * totalSharesBefore / tvlQBefore = 4000 * 2000 / 2000 = 4000
       const principal2 = amount2.mul(2); // 2000 + 2000
-      const totalBefore2 = await vault.totalShares();
-      expect(totalBefore2).to.equal(principal1); // sanity
+
+      // Supply before Bob's deposit
+      const supplyBefore2 = await vault.totalShares();
+
+      // TVL before Bob's deposit (QUOTE terms).
+      // With 1:1 price and equal decimals, tvlQ = baseBal + quoteBal.
+      const baseBalBefore2 = await token0.balanceOf(vault.address);
+      const quoteBalBefore2 = await token1.balanceOf(vault.address);
+      const tvlQBefore2 = baseBalBefore2.add(quoteBalBefore2);
+
+      // expectedShares2 = principal2 * (supplyBefore2 + VIRTUAL_SHARES) / (tvlQBefore2 + VIRTUAL_VALUEQ)
+      const expectedShares2 = principal2
+        .mul(supplyBefore2.add(VIRTUAL_SHARES))
+        .div(tvlQBefore2.add(VIRTUAL_VALUEQ));
 
       await vault.connect(bobSigner).depositWithPolicy(amount2, amount2, supraArgs);
 
       const totalSharesAfter2 = await vault.totalShares();
       const bobShares = await vault.userShares(bobAddr);
 
-      expect(bobShares).to.equal(principal2);
-      expect(totalSharesAfter2).to.equal(principal1.add(principal2));
+      expect(bobShares).to.equal(expectedShares2);
+      expect(totalSharesAfter2).to.equal(supplyBefore2.add(expectedShares2));
+
+      // Optional: check Bob deposit struct (depositId should be 1)
+      const dep1 = await vault.deposits(1);
+      expect(dep1.user).to.equal(bobAddr);
+      expect(dep1.shares).to.equal(expectedShares2);
     });
 
     it("accepts only a 50/50-by-value split when the vault is balanced", async () => {
@@ -1527,7 +1554,7 @@ describe("Vault", () => {
           const totalOut   = deltaBase.add(deltaQuote);
 
           // In a balanced vault with price=1, withdrawal payout must be 50/50 by value → equal units
-          expect(deltaBase).to.equal(deltaQuote);
+          expect(isWithinOne(deltaBase, deltaQuote)).to.eq(true)
 
           // User's shares are fully burned
           expect(await vault.userShares(aliceAddr)).to.equal(0);
@@ -1763,11 +1790,11 @@ describe("Vault", () => {
       const deltaQuote = quoteAfter.sub(quoteBefore);
 
       // 1) Total value must match owedValueQ
-      expect(deltaBase.add(deltaQuote)).to.equal(owedValueQ);
+      expect(isWithinOne(deltaBase.add(deltaQuote), owedValueQ)).to.eq(true);
 
       // 2) The split must match our simulated overweight-then-50/50 logic
-      expect(deltaBase).to.equal(expectedBasePay);
-      expect(deltaQuote).to.equal(expectedQuotePay);
+      expect(isWithinOne(deltaBase, expectedBasePay)).to.eq(true);
+      expect(isWithinOne(deltaQuote, expectedQuotePay)).to.eq(true);
 
       // 3) Since BASE is overweight, the user should receive *more* BASE than QUOTE in this withdraw
       expect(deltaBase.gte(deltaQuote)).to.equal(true);
@@ -1880,11 +1907,11 @@ describe("Vault", () => {
       const deltaQuote = quoteAfter.sub(quoteBefore);
 
       // 1) Total value must match owedValueQ
-      expect(deltaBase.add(deltaQuote)).to.equal(owedValueQ);
+      expect(isWithinOne(deltaBase.add(deltaQuote), owedValueQ)).to.eq(true)
 
       // 2) The split must match our simulated QUOTE-overweight logic
-      expect(deltaBase).to.equal(expectedBasePay);
-      expect(deltaQuote).to.equal(expectedQuotePay);
+      expect(isWithinOne(deltaBase, expectedBasePay)).to.eq(true)
+      expect(isWithinOne(deltaQuote, expectedQuotePay)).to.eq(true)
 
       // 3) Because QUOTE is overweight, user should receive >= QUOTE than BASE in units
       expect(deltaQuote.gte(deltaBase)).to.equal(true);
