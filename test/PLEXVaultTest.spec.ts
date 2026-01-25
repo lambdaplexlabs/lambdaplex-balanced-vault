@@ -396,7 +396,7 @@ describe("Vault", () => {
       await refreshOracleToNowAtOneToOne();
 
       // redeem ALL owner fee‑shares
-      await vault.connect(deployer).ownerRedeemFees(feeShares, supraArgs);
+      await vault.connect(deployer).ownerRedeemFees(feeShares, 0, 0, supraArgs);
 
       const ownerBaseAfter = await token0.balanceOf(ownerAddr);
       const ownerQuoteAfter = await token1.balanceOf(ownerAddr);
@@ -444,7 +444,7 @@ describe("Vault", () => {
       await refreshOracleToNowAtOneToOne();
 
       // redeem all fee‑shares
-      await vault.connect(deployer).ownerRedeemFees(feeShares, supraArgs);
+      await vault.connect(deployer).ownerRedeemFees(feeShares, 0, 0, supraArgs);
 
       const ownerBaseAfter = await token0.balanceOf(ownerAddr);
       const ownerQuoteAfter = await token1.balanceOf(ownerAddr);

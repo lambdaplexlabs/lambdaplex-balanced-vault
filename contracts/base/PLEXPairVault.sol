@@ -1036,6 +1036,8 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
     /// @notice Owner can redeem already‑accrued fee‑shares for BASE/QUOTE at any time.
     function ownerRedeemFees(
         uint256 feeSharesToBurn,
+        uint256 baseAmountMin,
+        uint256 quoteAmountMin,
         bytes memory supraArgs
     ) external onlyOwner nonReentrant {
         _accrueMgmtFee(); // ensure all vesting up to now is minted
@@ -1074,6 +1076,10 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
             quoteBal,
             imb
         );
+
+        // Add slippage protection checks
+        require(payBase >= baseAmountMin, "slippage: base");
+        require(payQuote >= quoteAmountMin, "slippage: quote");
 
         // Burn fee‑shares and shrink total supply
         ownerFeeShares = available - burn;
