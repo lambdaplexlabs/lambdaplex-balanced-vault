@@ -31,7 +31,6 @@ contract PLEXPairVaultHedera is PLEXPairVault {
             tokens[1] = quote_;
 
             (success, result) = systemContract.call(abi.encodeWithSignature("associateTokens(address,address[])", address(this), tokens));
-            
       }
       else {
             (success, result) = systemContract.call(abi.encodeWithSignature(
