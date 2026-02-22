@@ -36,7 +36,8 @@ contract PLEXPairVaultHedera is PLEXPairVault {
             (success, result) = systemContract.call(abi.encodeWithSignature(
                   "associateToken(address,address)", 
                   address(this),
-                  base_ < quote_ ? quote_ : base_));
+                  base_ < quote_ ? quote_ : base_
+            ));
       }
       require(success, "HTS Precompile: CALL_EXCEPTION");
       int32 responseCode = abi.decode(result, (int32));
