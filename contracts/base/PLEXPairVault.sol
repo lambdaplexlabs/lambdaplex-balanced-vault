@@ -169,7 +169,8 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
         uint256 indexed depositId,
         address indexed user,
         uint256 baseOut,
-        uint256 quoteOut
+        uint256 quoteOut,
+        uint256 sharesBurned
     );
 
     // Streaming airdrops
@@ -992,7 +993,7 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
     _transferOut(BASE,  payable(user), payBase);
     _transferOut(QUOTE, payable(user), payQuote);
 
-    emit WithdrawalFinalized(depositId, user, payBase, payQuote);
+    emit WithdrawalFinalized(depositId, user, payBase, payQuote, sh);
 }
 
     /// @notice Convenience: withdraw the entire lot.
@@ -1225,7 +1226,7 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
     _transferOut(BASE,  payable(user), baseOut);       // <-- use local
     _transferOut(QUOTE, payable(user), quoteOut);
 
-    emit WithdrawalFinalized(depositId, user, baseOut, quoteOut);
+    emit WithdrawalFinalized(depositId, user, baseOut, quoteOut, sh);
 }
 
     /// @notice Emergency redemption of already‑accrued owner fee‑shares for per‑token pro‑rata.
