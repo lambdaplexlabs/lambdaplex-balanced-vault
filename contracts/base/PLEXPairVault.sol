@@ -322,9 +322,12 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
         require(normal || inverse, "oracle: wrong pair");
 
         // --- Scale & raw price ---
-        scale = info.decimal[0]; // S
+        uint256 dec = info.decimal[0];
+        require(dec <= 77, "oracle: dec too big");
+        scale = 10 ** dec;
         require(scale > 0, "oracle: scale=0");
-        uint256 rawPrice = info.prices[0]; // P
+
+        uint256 rawPrice = info.prices[0];
         require(rawPrice > 0, "oracle: price=0");
 
         if (normal) {

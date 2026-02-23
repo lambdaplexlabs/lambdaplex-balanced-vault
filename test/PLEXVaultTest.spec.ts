@@ -24,7 +24,8 @@ describe("Vault", () => {
   const DAY_SECS = 24 * 60 * 60;
   const FIXED_SUPRA = "0x00000000000000000000000000000000000003f7";
   const PAIR_ID = 1;
-  const ORACLE_SCALE = BigNumber.from(10).pow(8);   // matches mockSupra decimal
+  const DEC = BigNumber.from(8)
+  const ORACLE_SCALE = BigNumber.from(10).pow(DEC);   // matches mockSupra decimal
   const PRICE_1_TO_1 = ORACLE_SCALE;               // 1 QUOTE per 1 BASE
 
   async function increaseTime(seconds: number) {
@@ -98,6 +99,7 @@ describe("Vault", () => {
 
     // Configure MockSupraPriceFeed for pairId=1
     const price = BigNumber.from(10).pow(8); // 1.0 * 1e8
+    const dec = BigNumber.from(8)
     const scale = BigNumber.from(10).pow(8); // 1e8
     const latestBlock = await ethers.provider.getBlock("latest");
     const ts = latestBlock!.timestamp;
@@ -107,7 +109,7 @@ describe("Vault", () => {
       [1],                 // pairs
       [price],             // prices
       [ts],                // timestamp
-      [scale],             // decimal
+      [dec],               // decimal
       [0]                  // round
     );
 
@@ -282,8 +284,9 @@ describe("Vault", () => {
   // Management fee
   // ─────────────────────────────────────────────────────────────
   describe("management fee accrual with mocked Supra", () => {
+    const DEC = BigNumber.from(8)
     const ONE = BigNumber.from(10).pow(8);         // token decimals = 8
-    const ORACLE_SCALE = BigNumber.from(10).pow(8);
+    const ORACLE_SCALE = BigNumber.from(10).pow(DEC);
     const PRICE_1_TO_1 = ORACLE_SCALE;             // 1 QUOTE per 1 BASE
     const PAIR_ID = 1;
 
@@ -296,7 +299,7 @@ describe("Vault", () => {
         [PAIR_ID],        // pairs
         [PRICE_1_TO_1],   // prices
         [ts],             // timestamp
-        [ORACLE_SCALE],   // decimal
+        [DEC],   // decimal
         [0]               // round
       );
     }
@@ -931,13 +934,14 @@ describe("Vault", () => {
       const latestBlock = await ethers.provider.getBlock("latest");
       const ts = latestBlock!.timestamp;
       const price = BigNumber.from(10).pow(8);  // 1.0 * 1e8
-      const scale = BigNumber.from(10).pow(8);  // 1e8
+      const dec = BigNumber.from(8)
+      const scale = BigNumber.from(10).pow(dec);  // 1e8
       await mockSupra.setPriceInfo(
         1,
         [1],        // pairs
         [price],    // prices
         [ts],       // timestamp
-        [scale],    // decimal
+        [dec],    // decimal
         [0]         // round
       );
     }
@@ -1192,7 +1196,7 @@ describe("Vault", () => {
         [PAIR_ID],        // pairs
         [PRICE_1_TO_1],   // prices
         [ts],             // timestamp
-        [ORACLE_SCALE],   // decimal
+        [DEC],   // decimal
         [0]               // round
       );
     }
@@ -1298,15 +1302,16 @@ describe("Vault", () => {
           // Refresh oracle so proof is not stale (1:1 price, same scale as in beforeEach)
           const latestBlock = await ethers.provider.getBlock("latest");
           const nowTs = latestBlock!.timestamp;
-          const price = BigNumber.from(10).pow(8); // 1.0 * 1e8
-          const scale = BigNumber.from(10).pow(8); // 1e8
+          const dec = BigNumber.from(8)
+          const price = BigNumber.from(10).pow(dec); // 1.0 * 1e8
+          const scale = BigNumber.from(10).pow(dec); // 1e8
 
           await mockSupra.setPriceInfo(
             1,
             [1],        // pairs
             [price],    // prices
             [nowTs],    // timestamp
-            [scale],    // decimal
+            [dec],    // decimal
             [0]         // round
           );
 
@@ -1948,7 +1953,8 @@ describe("Vault", () => {
       const ts = latestBlock!.timestamp;
 
       // Must match how you set it in beforeEach: price = scale for 1:1
-      const scale = BigNumber.from(10).pow(8); // 1e8
+      const dec = BigNumber.from(8)
+      const scale = BigNumber.from(10).pow(dec); // 1e8
       const price = scale;                     // 1.0 * scale
 
       await mockSupra.setPriceInfo(
@@ -1956,7 +1962,7 @@ describe("Vault", () => {
         [1],       // pairs
         [price],   // prices
         [ts],      // timestamp
-        [scale],   // decimal
+        [dec],   // decimal
         [0]        // round
       );
     }
@@ -3138,7 +3144,8 @@ describe("Vault", () => {
     }
 
     async function refreshOraclePrice1to1() {
-      const ONE = BigNumber.from(10).pow(8); // 1e8
+      const DEC = BigNumber.from(8)
+      const ONE = BigNumber.from(10).pow(DEC); // 1e8
       const latest = await ethers.provider.getBlock("latest");
       const ts = latest!.timestamp;
 
@@ -3147,7 +3154,7 @@ describe("Vault", () => {
         [1],    // pairs
         [ONE],  // prices (1.0 * 1e8)
         [ts],   // timestamp
-        [ONE],  // decimal (= scale = 1e8)
+        [DEC],  // decimal (= scale = 1e8)
         [0]     // round
       );
     }
@@ -3404,7 +3411,8 @@ describe("Vault", () => {
   });
   describe("airdrop rewards: forced re-entry fuzz (anti-steal)", () => {
     async function refreshOraclePrice1to1() {
-      const ONE = BigNumber.from(10).pow(8); // 1e8
+      const DEC = BigNumber.from(8)
+      const ONE = BigNumber.from(10).pow(DEC); // 1e8
       const latest = await ethers.provider.getBlock("latest");
       const ts = latest!.timestamp;
 
@@ -3413,7 +3421,7 @@ describe("Vault", () => {
         [1],    // pairs
         [ONE],  // prices (1.0 * 1e8)
         [ts],   // timestamp
-        [ONE],  // decimal (= scale = 1e8)
+        [DEC],  // decimal (= scale = 1e8)
         [0]     // round
       );
     }
