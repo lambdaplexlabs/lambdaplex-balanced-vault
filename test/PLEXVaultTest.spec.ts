@@ -1210,6 +1210,97 @@ describe("Vault", () => {
       expect(dep1.shares).to.equal(0);
     });
   });
+  describe("HBAR deposits: preview policy must ignore msg.value", () => {
+    it.only("BASE=HBAR: reverts with HBAR!=required on wrong msg.value, succeeds on correct msg.value", async () => {
+      const [, aliceSigner] = await ethers.getSigners();
+      const aliceAddr = await aliceSigner.getAddress();
+
+      // Deploy a vault where BASE is native HBAR and QUOTE is token1
+      const VaultFactory = await ethers.getContractFactory("PLEXPairVault");
+      const hbarVault = (await VaultFactory.deploy(
+        ethers.constants.AddressZero, // BASE = HBAR
+        token1.address,               // QUOTE = token1
+        ethers.constants.AddressZero, // ORACLE_BASE = HBAR
+        token1.address,               // ORACLE_QUOTE = token1
+        distributor.address,
+        initOwnerBips
+      )) as PLEXPairVault;
+      await hbarVault.deployed();
+
+      // Configure Supra for HBAR/token1 @ 1.0 (1e8 scale)
+      const PAIR_ID = 777;
+      await supraAtFixed.registerPair(PAIR_ID, ethers.constants.AddressZero, token1.address);
+
+      const ORACLE_DECIMALS_EXP = 8; // Supra "decimal exponent"
+      const rawPrice = BigNumber.from(10).pow(ORACLE_DECIMALS_EXP); // 1.0 * 1e8
+
+      async function refreshOracleNow() {
+        const ts = (await ethers.provider.getBlock("latest"))!.timestamp;
+        await mockSupra.setPriceInfo(
+          PAIR_ID,
+          [PAIR_ID],
+          [rawPrice],
+          [ts],
+          [ORACLE_DECIMALS_EXP], // <- exponent (8), not 1e8
+          [0]
+        );
+      }
+
+      const proof = ethers.utils.defaultAbiCoder.encode(["uint256"], [PAIR_ID]);
+
+      const baseMax = ethers.utils.parseUnits("10", 8);  // 10 HBAR (8 decimals)
+      const quoteMax = ethers.utils.parseUnits("10", 8); // 10 token1 (8 decimals)
+
+      // Fund/approve Alice for QUOTE side
+      await token1.transfer(aliceAddr, quoteMax);
+      await token1.connect(aliceSigner).approve(hbarVault.address, quoteMax);
+
+      // Ensure oracle is fresh for preview/deposit
+      await refreshOracleNow();
+
+      // Preview: on empty vault at 1:1 price, accept 50/50 (mode=2)
+      const [baseAcc, quoteAcc, mode] =
+        await hbarVault.callStatic.previewDepositRequiredLive(baseMax, quoteMax, proof);
+
+      expect(mode).to.equal(2);
+      expect(baseAcc).to.equal(baseMax);
+      expect(quoteAcc).to.equal(quoteMax);
+      expect(baseAcc).to.be.gt(0);
+
+      // ─────────────────────────────────────────────────────────────
+      // 1) WRONG msg.value should revert with the verbose reason
+      // ─────────────────────────────────────────────────────────────
+      await refreshOracleNow();
+      await expect(
+        hbarVault
+          .connect(aliceSigner)
+          .depositWithPolicy(baseMax, quoteMax, proof, { value: baseAcc.sub(1) })
+      ).to.be.revertedWith("HBAR!=required");
+
+      // ─────────────────────────────────────────────────────────────
+      // 2) CORRECT msg.value should succeed
+      //    (this is the part that fails pre-fix and passes post-fix)
+      // ─────────────────────────────────────────────────────────────
+      await refreshOracleNow();
+      await expect(
+        hbarVault
+          .connect(aliceSigner)
+          .depositWithPolicy(baseMax, quoteMax, proof, { value: baseAcc })
+      ).to.not.be.reverted;
+
+      // Post-conditions: vault actually holds the accepted HBAR + QUOTE
+      const vaultHBAR = await ethers.provider.getBalance(hbarVault.address);
+      expect(vaultHBAR).to.equal(baseAcc);
+
+      const vaultQuote = await token1.balanceOf(hbarVault.address);
+      expect(vaultQuote).to.equal(quoteAcc);
+
+      // Optional: verify the deposit record is sane
+      const dep0 = await hbarVault.deposits(0);
+      expect(dep0.user).to.equal(aliceAddr);
+      expect(dep0.shares).to.be.gt(0);
+    });
+  });
   // ─────────────────────────────────────────────────────────────
   // Withdrawals
   // ─────────────────────────────────────────────────────────────

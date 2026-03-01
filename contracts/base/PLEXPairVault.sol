@@ -295,7 +295,7 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
     function _vaultBalance(address token) internal view returns (uint256) {
         return
             token == address(0)
-                ? address(this).balance
+                ? address(this).balance - msg.value
                 : IERC20(token).balanceOf(address(this));
     }
 
