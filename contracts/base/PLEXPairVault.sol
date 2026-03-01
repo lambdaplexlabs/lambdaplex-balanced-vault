@@ -320,7 +320,16 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
     function _getPriceAndScale(
         bytes memory args
     ) internal returns (uint256 price, uint256 scale) {
-        ISupraRegistry.PriceInfo memory info = supra.verifyOracleProofV2(args);
+        ISupraRegistry.PriceInfo memory info;
+        try supra.verifyOracleProofV2(args) returns (
+            ISupraRegistry.PriceInfo memory verified
+        ) {
+            info = verified;
+        } catch Error(string memory reason) {
+            revert(string.concat("oracle: verify reverted: ", reason));
+        } catch {
+            revert("oracle: verify call failed");
+        }
         require(info.pairs.length == 1, "oracle: pairs!=1");
 
         // --- Freshness checks ---
@@ -331,9 +340,16 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
         require(nowU - t <= STALE_PRICE, "oracle: stale");
 
         // --- Pair identity checks ---
-        ISupraRegistry.TokenPair memory tokenPair = supra.getPair(
-            info.pairs[0]
-        );
+        ISupraRegistry.TokenPair memory tokenPair;
+        try supra.getPair(info.pairs[0]) returns (
+            ISupraRegistry.TokenPair memory pair
+        ) {
+            tokenPair = pair;
+        } catch Error(string memory reason) {
+            revert(string.concat("oracle: getPair reverted: ", reason));
+        } catch {
+            revert("oracle: getPair call failed");
+        }
         bool normal = (tokenPair.tokenA == ORACLE_BASE &&
             tokenPair.tokenB == ORACLE_QUOTE);
         bool inverse = (tokenPair.tokenA == ORACLE_QUOTE &&
