@@ -4,6 +4,7 @@ pragma solidity ^0.8.24;
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import "../libraries/PRBMathCommon.sol";
+import "../interfaces/IAirdropDistributor.sol";
 import "../interfaces/IERC20.sol";
 import "../interfaces/ISupraRegistry.sol";
 
@@ -21,8 +22,14 @@ abstract contract ReentrancyGuard {
 
 library SafeERC20 {
     function safeTransfer(IERC20 t, address to, uint256 v) internal {
-        bool ok = t.transfer(to, v);
-        require(ok, "TRANSFER_FAILED");
+        (bool success, bytes memory ret) =
+            address(t).call(
+                abi.encodeWithSelector(IERC20.transfer.selector, to, v)
+            );
+        require(success, "TRANSFER_CALL_FAILED");
+        if (ret.length > 0) {
+            require(abi.decode(ret, (bool)), "TRANSFER_FAILED");
+        }
     }
     function safeTransferFrom(
         IERC20 t,
@@ -30,19 +37,20 @@ library SafeERC20 {
         address to,
         uint256 v
     ) internal {
-        bool ok = t.transferFrom(from, to, v);
-        require(ok, "TRANSFER_FROM_FAILED");
+        (bool success, bytes memory ret) =
+            address(t).call(
+                abi.encodeWithSelector(IERC20.transferFrom.selector, from, to, v)
+            );
+        require(success, "TRANSFER_FROM_CALL_FAILED");
+        if (ret.length > 0) {
+            require(abi.decode(ret, (bool)), "TRANSFER_FROM_FAILED");
+        }
     }
 }
 
 /* ───────────────────────── Distributor interface ───────────────────────── */
 
-interface IAirdropDistributor {
-    function claimTo(
-        address token,
-        address to,
-        uint256 amount
-    ) external;
+interface IOwnable {
     function owner() external view returns (address);
 }
 
@@ -57,8 +65,10 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
     address public immutable QUOTE;
 
     // Supra oracle registry (used for pricing BASE→QUOTE)
+    address internal constant SUPRA_REGISTRY_ADDRESS =
+        address(0xABaBaBaBABabABabAbAbABAbABabababaBaBABaB);
     ISupraRegistry public immutable supra =
-        ISupraRegistry(address(0x00000000000000000000000000000000000003f7));
+        ISupraRegistry(SUPRA_REGISTRY_ADDRESS);
         
     address public immutable ORACLE_BASE;
     address public immutable ORACLE_QUOTE;
@@ -177,7 +187,8 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
         uint256 indexed depositId,
         address indexed user,
         uint256 baseOut,
-        uint256 quoteOut
+        uint256 quoteOut,
+        uint256 sharesBurned
     );
 
     // Streaming airdrops
@@ -313,7 +324,16 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
     function _getPriceAndScale(
         bytes memory args
     ) internal returns (uint256 price, uint256 scale) {
-        ISupraRegistry.PriceInfo memory info = supra.verifyOracleProofV2(args);
+        ISupraRegistry.PriceInfo memory info;
+        try supra.verifyOracleProofV2(args) returns (
+            ISupraRegistry.PriceInfo memory verified
+        ) {
+            info = verified;
+        } catch Error(string memory reason) {
+            revert(string.concat("oracle: verify reverted: ", reason));
+        } catch {
+            revert("oracle: verify call failed");
+        }
         require(info.pairs.length == 1, "oracle: pairs!=1");
 
         // --- Freshness checks ---
@@ -324,9 +344,16 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
         require(nowU - t <= STALE_PRICE, "oracle: stale");
 
         // --- Pair identity checks ---
-        ISupraRegistry.TokenPair memory tokenPair = supra.getPair(
-            info.pairs[0]
-        );
+        ISupraRegistry.TokenPair memory tokenPair;
+        try supra.getPair(info.pairs[0]) returns (
+            ISupraRegistry.TokenPair memory pair
+        ) {
+            tokenPair = pair;
+        } catch Error(string memory reason) {
+            revert(string.concat("oracle: getPair reverted: ", reason));
+        } catch {
+            revert("oracle: getPair call failed");
+        }
         bool normal = (tokenPair.tokenA == ORACLE_BASE &&
             tokenPair.tokenB == ORACLE_QUOTE);
         bool inverse = (tokenPair.tokenA == ORACLE_QUOTE &&
@@ -334,8 +361,11 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
         require(normal || inverse, "oracle: wrong pair");
 
         // --- Scale & raw price ---
-        scale = info.decimal[0]; // S
+        uint256 dec = info.decimal[0];
+        require(dec <= 77, "oracle: dec too big");
+        scale = 10 ** dec;
         require(scale > 0, "oracle: scale=0");
+
         uint256 rawPrice = info.prices[0]; // P
         require(rawPrice > 0, "oracle: price=0");
 
@@ -372,6 +402,38 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
     }
 
     /// @dev Returns inventory values in QUOTE units and signed imbalance (>0 = BASE overweight; <0 = QUOTE overweight).
+    function _inventoryValuesFromBalances(
+        uint256 baseBal,
+        uint256 quoteBal,
+        uint256 price,
+        uint256 scale
+    )
+        internal
+        pure
+        returns (
+            uint256 outBaseBal,
+            uint256 outQuoteBal,
+            uint256 baseValQ,
+            uint256 quoteValQ,
+            uint256 tvlQ,
+            int256 imbalanceQ
+        )
+    {
+        outBaseBal = baseBal;
+        outQuoteBal = quoteBal;
+        baseValQ = (baseBal * price) / scale;
+        quoteValQ = quoteBal;
+        tvlQ = baseValQ + quoteValQ;
+
+        // Safe signed difference
+        if (baseValQ >= quoteValQ) {
+            imbalanceQ = int256(baseValQ - quoteValQ);
+        } else {
+            imbalanceQ = -int256(quoteValQ - baseValQ);
+        }
+    }
+
+    /// @dev Returns inventory values in QUOTE units and signed imbalance (>0 = BASE overweight; <0 = QUOTE overweight).
     function _inventoryValues(
         uint256 price,
         uint256 scale
@@ -387,18 +449,13 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
             int256 imbalanceQ
         )
     {
-        baseBal = _vaultBalance(BASE);
-        quoteBal = _vaultBalance(QUOTE);
-        baseValQ = (baseBal * price) / scale;
-        quoteValQ = quoteBal;
-        tvlQ = baseValQ + quoteValQ;
-
-        // Safe signed difference
-        if (baseValQ >= quoteValQ) {
-            imbalanceQ = int256(baseValQ - quoteValQ);
-        } else {
-            imbalanceQ = -int256(quoteValQ - baseValQ);
-        }
+        return
+            _inventoryValuesFromBalances(
+                _vaultBalance(BASE),
+                _vaultBalance(QUOTE),
+                price,
+                scale
+            );
     }
 
     /* ───────────────────────── Virtual share helpers ───────────────────────── */
@@ -789,6 +846,30 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
         view
         returns (uint256 baseAccept, uint256 quoteAccept, uint8 mode)
     {
+        return
+            _previewDepositRequiredFromBalances(
+                baseDesired,
+                quoteDesired,
+                price,
+                scale,
+                _vaultBalance(BASE),
+                _vaultBalance(QUOTE)
+            );
+    }
+
+    /// @dev Same as _previewDepositRequired but allows the caller to provide explicit inventory balances.
+    function _previewDepositRequiredFromBalances(
+        uint256 baseDesired,
+        uint256 quoteDesired,
+        uint256 price,
+        uint256 scale,
+        uint256 baseBal,
+        uint256 quoteBal
+    )
+        internal
+        view
+        returns (uint256 baseAccept, uint256 quoteAccept, uint8 mode)
+    {
         (
             ,
             ,
@@ -796,7 +877,7 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
             uint256 quoteValQ,
             uint256 tvlQ,
             int256 imb
-        ) = _inventoryValues(price, scale);
+        ) = _inventoryValuesFromBalances(baseBal, quoteBal, price, scale);
 
         // Treat TVL=0 as "balanced" (50/50 required).
         bool balanced = _isBalanced(tvlQ, imb);
@@ -899,12 +980,26 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
         _accrueMgmtFee(); // checkpoint fee‑shares first
         (uint256 price, uint256 scale) = _getPriceAndScale(supraArgs);
 
+        // Use pre-call balances for policy preview (address(this).balance already includes msg.value).
+        uint256 balBaseBefore = _vaultBalance(BASE);
+        uint256 balQuoteBefore = _vaultBalance(QUOTE);
+        if (BASE == address(0)) {
+            require(balBaseBefore >= msg.value, "HBAR accounting");
+            balBaseBefore -= msg.value;
+        }
+        if (QUOTE == address(0)) {
+            require(balQuoteBefore >= msg.value, "HBAR accounting");
+            balQuoteBefore -= msg.value;
+        }
+
         // Preview what we will accept right now
-        (uint256 baseAcc, uint256 quoteAcc, ) = _previewDepositRequired(
+        (uint256 baseAcc, uint256 quoteAcc, ) = _previewDepositRequiredFromBalances(
             baseMax,
             quoteMax,
             price,
-            scale
+            scale,
+            balBaseBefore,
+            balQuoteBefore
         );
 
         require(baseAcc > 0 || quoteAcc > 0, "nothing accepted");
@@ -915,13 +1010,7 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
         if (QUOTE == address(0)) requiredHBAR += quoteAcc;
         require(msg.value == requiredHBAR, "HBAR!=required");
 
-        // Pre-balances for TVL-before (msg.value already added; subtract accepted HBAR side)
-        uint256 balBaseBefore = BASE == address(0)
-            ? (address(this).balance - baseAcc)
-            : IERC20(BASE).balanceOf(address(this));
-        uint256 balQuoteBefore = QUOTE == address(0)
-            ? (address(this).balance - quoteAcc)
-            : IERC20(QUOTE).balanceOf(address(this));
+        // Pre-balances for TVL-before.
 
         // Pull ERC-20 funds (FOT forbidden: must receive exactly requested)
         if (baseAcc > 0 && BASE != address(0)) {
@@ -1028,7 +1117,7 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
         _transferOut(BASE,  payable(user), payBase);
         _transferOut(QUOTE, payable(user), payQuote);
 
-        emit WithdrawalFinalized(depositId, user, payBase, payQuote);
+        emit WithdrawalFinalized(depositId, user, payBase, payQuote, sh);
     }
 
     /// @notice Convenience: withdraw the entire lot.
@@ -1210,7 +1299,7 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
         address dOwner = address(0);
         if (d != address(0)) {
             // If distributor is Ownable, read its owner; ignore if it reverts or returns nothing.
-            try IAirdropDistributor(d).owner() returns (address o) {
+            try IOwnable(d).owner() returns (address o) {
                 dOwner = o;
             } catch {
                 /* leave dOwner = address(0) */
@@ -1267,7 +1356,7 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
         _transferOut(BASE,  payable(user), baseOut);       // <-- use local
         _transferOut(QUOTE, payable(user), quoteOut);
 
-        emit WithdrawalFinalized(depositId, user, baseOut, quoteOut);
+        emit WithdrawalFinalized(depositId, user, baseOut, quoteOut, sh);
     }
 
     /// @notice Emergency redemption of already‑accrued owner fee‑shares for per‑token pro‑rata.
