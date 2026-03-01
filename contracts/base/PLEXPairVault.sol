@@ -3,6 +3,7 @@ pragma solidity ^0.8.24;
 
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "../libraries/PRBMathCommon.sol";
+import "../interfaces/IAirdropDistributor.sol";
 import "../interfaces/IERC20.sol";
 import "../interfaces/ISupraRegistry.sol";
 
@@ -46,14 +47,7 @@ library SafeERC20 {
     }
 }
 
-/* ───────────────────────── Distributor interface ───────────────────────── */
-
-interface IAirdropDistributor {
-    function claimTo(
-        address token,
-        address to,
-        uint256 amount
-    ) external;
+interface IOwnable {
     function owner() external view returns (address);
 }
 
@@ -1184,7 +1178,7 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
         address dOwner = address(0);
         if (d != address(0)) {
             // If distributor is Ownable, read its owner; ignore if it reverts or returns nothing.
-            try IAirdropDistributor(d).owner() returns (address o) {
+            try IOwnable(d).owner() returns (address o) {
                 dOwner = o;
             } catch {
                 /* leave dOwner = address(0) */
