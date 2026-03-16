@@ -11,8 +11,23 @@ contract MockPLEXPairVault is PLEXPairVault {
         address oracleBase_,
         address oracleQuote_,
         address distributor_,
-        uint32 ownerBips_
-    ) PLEXPairVault(base_, quote_, oracleBase_, oracleQuote_, distributor_, ownerBips_) {
+        uint32 ownerFeeBips_,
+        uint64 vestingSecs_,
+        uint64 lockupSecs_,
+        uint64 feeChangeDelaySecs_,
+        uint32 initialBalanceTolBips_
+    ) PLEXPairVault(
+        base_,
+        quote_,
+        oracleBase_,
+        oracleQuote_,
+        distributor_,
+        ownerFeeBips_,
+        vestingSecs_,
+        lockupSecs_,
+        feeChangeDelaySecs_,
+        initialBalanceTolBips_
+    ) {
 
     }
 }

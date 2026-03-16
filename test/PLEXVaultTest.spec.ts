@@ -71,7 +71,11 @@ describe("Vault", () => {
       token0.address,
       token1.address,
       distributor.address,
-      initOwnerBips
+      initOwnerBips,
+      WEEK_SECS,
+      DAY_SECS,
+      WEEK_SECS,
+      1000
     )) as PLEXPairVault;
     await vault.deployed();
 
@@ -214,7 +218,7 @@ describe("Vault", () => {
       // cooldown: cannot change again within <1 week
       await expect(
         vault.scheduleOwnerFeeBips(1000)
-      ).to.be.revertedWith("fee change cooldown < 1w");
+      ).to.be.revertedWith("fee change cooldown");
 
       // move time forward >1 week and schedule again
       await increaseTime(WEEK_SECS + 1);
@@ -334,7 +338,7 @@ describe("Vault", () => {
 
       // 1) Alice deposits balanced liquidity (this also calls _accrueMgmtFee once)
       await refreshOracleToNowAtOneToOne();
-      await vault.connect(alice).depositWithPolicy(depositAmount, depositAmount, supraArgs);
+      await vault.connect(alice).depositWithPolicy(depositAmount, depositAmount, 0, 0, supraArgs);
 
       // 2) schedule a new owner fee rate
       const tx = await vault.scheduleOwnerFeeBips(newBips);
@@ -512,7 +516,11 @@ describe("Vault", () => {
         token0.address,
         token1.address,
         distributor2.address,
-        0  // initOwnerBips
+        initOwnerBips,
+        WEEK_SECS,
+        DAY_SECS,
+        WEEK_SECS,
+        1000
       )) as PLEXPairVault;
       await vault2.deployed();
 
@@ -542,7 +550,7 @@ describe("Vault", () => {
       await token1.connect(alice).approve(vault.address, depositAmount);
 
       // deposit works before emergency
-      await vault.connect(alice).depositWithPolicy(depositAmount, depositAmount, supraArgs);
+      await vault.connect(alice).depositWithPolicy(depositAmount, depositAmount, 0, 0, supraArgs);
 
       // enable emergency
       await vault.enableEmergencyMode();
@@ -550,7 +558,7 @@ describe("Vault", () => {
 
       // further deposits are blocked
       await expect(
-        vault.connect(alice).depositWithPolicy(depositAmount, depositAmount, supraArgs)
+        vault.connect(alice).depositWithPolicy(depositAmount, depositAmount, 0, 0, supraArgs)
       ).to.be.revertedWith("emergency: deposits disabled");
     });
 
@@ -563,7 +571,7 @@ describe("Vault", () => {
       await token0.connect(alice).approve(vault.address, depositAmount);
       await token1.connect(alice).approve(vault.address, depositAmount);
 
-      await vault.connect(alice).depositWithPolicy(depositAmount, depositAmount, supraArgs);
+      await vault.connect(alice).depositWithPolicy(depositAmount, depositAmount, 0, 0, supraArgs);
 
       const userDeps = await vault.depositsOf(aliceAddr);
       expect(userDeps.length).to.eq(1);
@@ -586,7 +594,7 @@ describe("Vault", () => {
       await token1.connect(alice).approve(vault.address, depositAmount);
 
       // Deposit once (balanced)
-      await vault.connect(alice).depositWithPolicy(depositAmount, depositAmount, supraArgs);
+      await vault.connect(alice).depositWithPolicy(depositAmount, depositAmount, 0, 0, supraArgs);
 
       const userDeps = await vault.depositsOf(aliceAddr);
       expect(userDeps.length).to.eq(1);
@@ -646,7 +654,7 @@ describe("Vault", () => {
       await token0.connect(aliceSigner).approve(vault.address, depositAmount);
       await token1.connect(aliceSigner).approve(vault.address, depositAmount);
 
-      await vault.connect(aliceSigner).depositWithPolicy(depositAmount, depositAmount, supraArgs);
+      await vault.connect(aliceSigner).depositWithPolicy(depositAmount, depositAmount, 0, 0, supraArgs);
 
       // Schedule a non-zero fee rate, effective in 1 week
       const newFeeBips = 1_000; // 0.1% / week
@@ -760,7 +768,7 @@ describe("Vault", () => {
       // expectedShares1 = principal1 * (0 + VIRTUAL_SHARES) / (0 + VIRTUAL_VALUEQ)
       const expectedShares1 = principal1.mul(VIRTUAL_SHARES).div(VIRTUAL_VALUEQ);
 
-      await vault.connect(aliceSigner).depositWithPolicy(amount1, amount1, supraArgs);
+      await vault.connect(aliceSigner).depositWithPolicy(amount1, amount1, 0, 0, supraArgs);
 
       const totalSharesAfter1 = await vault.totalShares();
       const aliceShares = await vault.userShares(aliceAddr);
@@ -790,7 +798,7 @@ describe("Vault", () => {
         .mul(supplyBefore2.add(VIRTUAL_SHARES))
         .div(tvlQBefore2.add(VIRTUAL_VALUEQ));
 
-      await vault.connect(bobSigner).depositWithPolicy(amount2, amount2, supraArgs);
+      await vault.connect(bobSigner).depositWithPolicy(amount2, amount2, 0, 0, supraArgs);
 
       const totalSharesAfter2 = await vault.totalShares();
       const bobShares = await vault.userShares(bobAddr);
@@ -821,7 +829,7 @@ describe("Vault", () => {
       const baseVaultBefore = await token0.balanceOf(vault.address);
       const quoteVaultBefore = await token1.balanceOf(vault.address);
 
-      await vault.connect(aliceSigner).depositWithPolicy(baseDesired, quoteDesired, supraArgs);
+      await vault.connect(aliceSigner).depositWithPolicy(baseDesired, quoteDesired, 0, 0, supraArgs);
 
       const baseVaultAfter = await token0.balanceOf(vault.address);
       const quoteVaultAfter = await token1.balanceOf(vault.address);
@@ -851,12 +859,12 @@ describe("Vault", () => {
 
       // Only BASE
       await expect(
-        vault.connect(aliceSigner).depositWithPolicy(extraBase, 0, supraArgs)
+        vault.connect(aliceSigner).depositWithPolicy(extraBase, 0, 0, 0, supraArgs)
       ).to.be.revertedWith("nothing accepted");
 
       // Only QUOTE
       await expect(
-        vault.connect(aliceSigner).depositWithPolicy(0, extraQuote, supraArgs)
+        vault.connect(aliceSigner).depositWithPolicy(0, extraQuote, 0, 0, supraArgs)
       ).to.be.revertedWith("nothing accepted");
     });
 
@@ -886,7 +894,7 @@ describe("Vault", () => {
       const baseVaultBeforeA = await token0.balanceOf(vault.address);
       const quoteVaultBeforeA = await token1.balanceOf(vault.address);
 
-      await vault.connect(aliceSigner).depositWithPolicy(baseMaxA, quoteMaxA, supraArgs);
+      await vault.connect(aliceSigner).depositWithPolicy(baseMaxA, quoteMaxA, 0, 0, supraArgs);
 
       const baseVaultAfterA = await token0.balanceOf(vault.address);
       const quoteVaultAfterA = await token1.balanceOf(vault.address);
@@ -932,7 +940,7 @@ describe("Vault", () => {
       // Total accepted in this second deposit:
       //   baseAccept  = 400 + 1600 = 2000
       //   quoteAccept = 1600
-      await vault.connect(bobSigner).depositWithPolicy(baseMaxB, quoteMaxB, supraArgs);
+      await vault.connect(bobSigner).depositWithPolicy(baseMaxB, quoteMaxB, 0, 0, supraArgs);
 
       const baseVaultAfterB = await token0.balanceOf(vault.address);
       const quoteVaultAfterB = await token1.balanceOf(vault.address);
@@ -988,7 +996,7 @@ describe("Vault", () => {
       await token1.connect(alice).approve(vault.address, amt);
 
       // 1st deposit
-      await vault.connect(alice).depositWithPolicy(amt, amt, supraArgs);
+      await vault.connect(alice).depositWithPolicy(amt, amt, 0, 0, supraArgs);
       let aliceDeposits = await vault.depositsOf(aliceAddr);
       expect(aliceDeposits.length).to.equal(1);
       const firstId = aliceDeposits[0];
@@ -1017,7 +1025,7 @@ describe("Vault", () => {
       // 2nd deposit by Alice
       await token0.connect(alice).approve(vault.address, amt);
       await token1.connect(alice).approve(vault.address, amt);
-      await vault.connect(alice).depositWithPolicy(amt, amt, supraArgs);
+      await vault.connect(alice).depositWithPolicy(amt, amt, 0, 0, supraArgs);
 
       aliceDeposits = await vault.depositsOf(aliceAddr);
       expect(aliceDeposits.length).to.equal(1);
@@ -1044,7 +1052,7 @@ describe("Vault", () => {
       await token0.connect(alice).approve(vault.address, amt);
       await token1.connect(alice).approve(vault.address, amt);
 
-      await vault.connect(alice).depositWithPolicy(amt, amt, supraArgs);
+      await vault.connect(alice).depositWithPolicy(amt, amt, 0, 0, supraArgs);
       let ids = await vault.depositsOf(aliceAddr);
       expect(ids.length).to.equal(1);
       const depId = ids[0];
@@ -1097,11 +1105,11 @@ describe("Vault", () => {
       await token1.connect(bob).approve(vault.address, amt.mul(2));
 
       // Alice deposits twice
-      await vault.connect(alice).depositWithPolicy(amt, amt, supraArgs);
-      await vault.connect(alice).depositWithPolicy(amt, amt, supraArgs);
+      await vault.connect(alice).depositWithPolicy(amt, amt, 0, 0, supraArgs);
+      await vault.connect(alice).depositWithPolicy(amt, amt, 0, 0, supraArgs);
 
       // Bob deposits once
-      await vault.connect(bob).depositWithPolicy(amt, amt, supraArgs);
+      await vault.connect(bob).depositWithPolicy(amt, amt, 0, 0, supraArgs);
 
       let aliceIds = await vault.depositsOf(aliceAddr);
       let bobIds   = await vault.depositsOf(bobAddr);
@@ -1142,7 +1150,7 @@ describe("Vault", () => {
       await token1.connect(alice).approve(vault.address, amt);
 
       // Alice deposit
-      await vault.connect(alice).depositWithPolicy(amt, amt, supraArgs);
+      await vault.connect(alice).depositWithPolicy(amt, amt, 0, 0, supraArgs);
       let ids = await vault.depositsOf(aliceAddr);
       expect(ids.length).to.equal(1);
       const depId = ids[0];
@@ -1178,9 +1186,9 @@ describe("Vault", () => {
       await token1.connect(alice).approve(vault.address, totalNeeded);
 
       // Three deposits → _userDeposits[alice] should have 3 lot ids
-      await vault.connect(alice).depositWithPolicy(depositAmt, depositAmt, supraArgs);
-      await vault.connect(alice).depositWithPolicy(depositAmt, depositAmt, supraArgs);
-      await vault.connect(alice).depositWithPolicy(depositAmt, depositAmt, supraArgs);
+      await vault.connect(alice).depositWithPolicy(depositAmt, depositAmt, 0, 0, supraArgs);
+      await vault.connect(alice).depositWithPolicy(depositAmt, depositAmt, 0, 0, supraArgs);
+      await vault.connect(alice).depositWithPolicy(depositAmt, depositAmt, 0, 0, supraArgs);
 
       let deps = await vault.depositsOf(aliceAddr);
       expect(deps.length).to.equal(3);
@@ -1211,7 +1219,7 @@ describe("Vault", () => {
     });
   });
   describe("HBAR deposits: preview policy must ignore msg.value", () => {
-    it.only("BASE=HBAR: reverts with HBAR!=required on wrong msg.value, succeeds on correct msg.value", async () => {
+    it("BASE=HBAR: reverts with HBAR!=required on wrong msg.value, succeeds on correct msg.value", async () => {
       const [, aliceSigner] = await ethers.getSigners();
       const aliceAddr = await aliceSigner.getAddress();
 
@@ -1223,7 +1231,11 @@ describe("Vault", () => {
         ethers.constants.AddressZero, // ORACLE_BASE = HBAR
         token1.address,               // ORACLE_QUOTE = token1
         distributor.address,
-        initOwnerBips
+        initOwnerBips,
+        WEEK_SECS,
+        DAY_SECS,
+        WEEK_SECS,
+        1000
       )) as PLEXPairVault;
       await hbarVault.deployed();
 
@@ -1274,8 +1286,8 @@ describe("Vault", () => {
       await expect(
         hbarVault
           .connect(aliceSigner)
-          .depositWithPolicy(baseMax, quoteMax, proof, { value: baseAcc.sub(1) })
-      ).to.be.revertedWith("HBAR!=required");
+          .depositWithPolicy(baseMax, quoteMax, 0, 0, proof, { value: baseAcc.sub(1) })
+      ).to.be.revertedWith("HBAR<required");
 
       // ─────────────────────────────────────────────────────────────
       // 2) CORRECT msg.value should succeed
@@ -1285,7 +1297,7 @@ describe("Vault", () => {
       await expect(
         hbarVault
           .connect(aliceSigner)
-          .depositWithPolicy(baseMax, quoteMax, proof, { value: baseAcc })
+          .depositWithPolicy(baseMax, quoteMax, 0, 0, proof, { value: baseAcc })
       ).to.not.be.reverted;
 
       // Post-conditions: vault actually holds the accepted HBAR + QUOTE
@@ -1338,7 +1350,7 @@ describe("Vault", () => {
           await token1.connect(alice).approve(vault.address, quoteAmt);
 
           // balanced deposit into empty vault
-          await vault.connect(alice).depositWithPolicy(baseAmt, quoteAmt, supraArgs);
+          await vault.connect(alice).depositWithPolicy(baseAmt, quoteAmt, 0, 0, supraArgs);
 
           // fetch her depositId and lot data
           const ids = await vault.depositsOf(aliceAddr);
@@ -1407,7 +1419,7 @@ describe("Vault", () => {
           await token1.connect(alice).approve(vault.address, quoteAmt);
 
           // Deposit balanced liquidity into an empty vault
-          await vault.connect(alice).depositWithPolicy(baseAmt, quoteAmt, supraArgs);
+          await vault.connect(alice).depositWithPolicy(baseAmt, quoteAmt, 0, 0, supraArgs);
 
           // Grab her single deposit lot
           const ids = await vault.depositsOf(aliceAddr);
@@ -1491,8 +1503,8 @@ describe("Vault", () => {
           await token1.connect(bob).approve(vault.address, bobAmt);
 
           // Both deposit with price=1:1 (from beforeEach oracle setup)
-          await vault.connect(alice).depositWithPolicy(aliceAmt, aliceAmt, supraArgs);
-          await vault.connect(bob).depositWithPolicy(bobAmt, bobAmt, supraArgs);
+          await vault.connect(alice).depositWithPolicy(aliceAmt, aliceAmt, 0, 0, supraArgs);
+          await vault.connect(bob).depositWithPolicy(bobAmt, bobAddr, 0, 0, supraArgs);
 
           // One deposit lot each
           const aliceDeposits = await vault.depositsOf(aliceAddr);
@@ -1583,7 +1595,7 @@ describe("Vault", () => {
           await token0.connect(aliceSigner).approve(vault.address, depositAmount);
           await token1.connect(aliceSigner).approve(vault.address, depositAmount);
 
-          await vault.connect(aliceSigner).depositWithPolicy(depositAmount, depositAmount, supraArgs);
+          await vault.connect(aliceSigner).depositWithPolicy(depositAmount, depositAmount, 0, 0, supraArgs);
 
           const aliceDeposits = await vault.depositsOf(aliceAddr);
           expect(aliceDeposits.length).to.equal(1);
@@ -1687,7 +1699,7 @@ describe("Vault", () => {
 
       // Fresh 1:1 oracle price and deposit
       await refreshOracleToNowAtOneToOne();
-      await vault.connect(alice).depositWithPolicy(depositAmt, depositAmt, supraArgs);
+      await vault.connect(alice).depositWithPolicy(depositAmt, depositAmt, 0, 0, supraArgs);
 
       let aliceDeposits = await vault.depositsOf(aliceAddr);
       expect(aliceDeposits.length).to.equal(1);
@@ -1757,7 +1769,7 @@ describe("Vault", () => {
 
       // Balanced deposit
       await refreshOracleToNowAtOneToOne();
-      await vault.connect(alice).depositWithPolicy(depositAmt, depositAmt, supraArgs);
+      await vault.connect(alice).depositWithPolicy(depositAmt, depositAmt, 0, 0, supraArgs);
 
       let ids = await vault.depositsOf(aliceAddr);
       expect(ids.length).to.equal(1);
@@ -1799,7 +1811,7 @@ describe("Vault", () => {
 
       // Balanced initial deposit
       await refreshOracleToNowAtOneToOne();
-      await vault.connect(alice).depositWithPolicy(depositAmt, depositAmt, supraArgs);
+      await vault.connect(alice).depositWithPolicy(depositAmt, depositAmt, 0, 0, supraArgs);
 
       let ids = await vault.depositsOf(aliceAddr);
       expect(ids.length).to.equal(1);
@@ -1914,7 +1926,7 @@ describe("Vault", () => {
 
       // Balanced initial deposit
       await refreshOracleToNowAtOneToOne();
-      await vault.connect(alice).depositWithPolicy(depositAmt, depositAmt, supraArgs);
+      await vault.connect(alice).depositWithPolicy(depositAmt, depositAmt, 0, 0, supraArgs);
 
       let ids = await vault.depositsOf(aliceAddr);
       expect(ids.length).to.equal(1);
@@ -2028,7 +2040,7 @@ describe("Vault", () => {
       await token1.connect(alice).approve(vault.address, depositAmt);
 
       await refreshOracleToNowAtOneToOne();
-      await vault.connect(alice).depositWithPolicy(depositAmt, depositAmt, supraArgs);
+      await vault.connect(alice).depositWithPolicy(depositAmt, depositAmt, 0, 0, supraArgs);
 
       let ids = await vault.depositsOf(aliceAddr);
       expect(ids.length).to.equal(1);
@@ -2097,7 +2109,7 @@ describe("Vault", () => {
       const decimals = await token1.decimals();
       const ONE = BigNumber.from(10).pow(decimals); // 1 smallest TK1 unit
 
-      const VESTING_SECS = await vault.VESTING_SECS();
+      const VESTING_SECS = await vault.vestingSecs();
 
       // 1) Alice makes a balanced deposit
       const depositAmt = ONE.mul(1_000); // 1000 TK0 + 1000 TK1
@@ -2107,7 +2119,7 @@ describe("Vault", () => {
       await token0.connect(aliceSigner).approve(vault.address, depositAmt);
       await token1.connect(aliceSigner).approve(vault.address, depositAmt);
 
-      await vault.connect(aliceSigner).depositWithPolicy(depositAmt, depositAmt, supraArgs);
+      await vault.connect(aliceSigner).depositWithPolicy(depositAmt, depositAmt, 0, 0, supraArgs);
 
       const aliceShares = await vault.userShares(aliceAddr);
       const totalShares = await vault.totalShares();
@@ -2150,7 +2162,7 @@ describe("Vault", () => {
 
       const decimals = await token1.decimals();
       const ONE = BigNumber.from(10).pow(decimals);
-      const VESTING_SECS = await vault.VESTING_SECS();
+      const VESTING_SECS = await vault.vestingSecs();
 
       // 1) Alice deposits 2x Bob, so shares ratio is ~2:1
       const baseAlice = ONE.mul(2_000);
@@ -2163,14 +2175,14 @@ describe("Vault", () => {
       await token1.transfer(aliceAddr, quoteAlice);
       await token0.connect(aliceSigner).approve(vault.address, baseAlice);
       await token1.connect(aliceSigner).approve(vault.address, quoteAlice);
-      await vault.connect(aliceSigner).depositWithPolicy(baseAlice, quoteAlice, supraArgs);
+      await vault.connect(aliceSigner).depositWithPolicy(baseAlice, quoteAlice, 0, 0, supraArgs);
 
       // fund & approve Bob
       await token0.transfer(bobAddr, baseBob);
       await token1.transfer(bobAddr, quoteBob);
       await token0.connect(bobSigner).approve(vault.address, baseBob);
       await token1.connect(bobSigner).approve(vault.address, quoteBob);
-      await vault.connect(bobSigner).depositWithPolicy(baseBob, quoteBob, supraArgs);
+      await vault.connect(bobSigner).depositWithPolicy(baseBob, quoteBob, 0, 0, supraArgs);
 
       const aliceShares = await vault.userShares(aliceAddr);
       const bobShares = await vault.userShares(bobAddr);
@@ -2239,7 +2251,7 @@ describe("Vault", () => {
 
       const decimals = await token1.decimals();
       const ONE = BigNumber.from(10).pow(decimals);
-      const VESTING_SECS = await vault.VESTING_SECS();
+      const VESTING_SECS = await vault.vestingSecs();
 
       // 1) Single depositor, balanced deposit
       const depositAmt = ONE.mul(1_000);
@@ -2249,7 +2261,7 @@ describe("Vault", () => {
       await token0.connect(aliceSigner).approve(vault.address, depositAmt);
       await token1.connect(aliceSigner).approve(vault.address, depositAmt);
 
-      await vault.connect(aliceSigner).depositWithPolicy(depositAmt, depositAmt, supraArgs);
+      await vault.connect(aliceSigner).depositWithPolicy(depositAmt, depositAmt, 0, 0, supraArgs);
 
       const aliceShares = await vault.userShares(aliceAddr);
       const totalShares = await vault.totalShares();
@@ -2327,7 +2339,7 @@ describe("Vault", () => {
       const decimalsB = await rewardB.decimals();
       const ONE_B = BigNumber.from(10).pow(decimalsB);
 
-      const VESTING_SECS = await vault.VESTING_SECS();
+      const VESTING_SECS = await vault.vestingSecs();
 
       // 1) Alice makes a balanced deposit in the base/quote pair
       const depositAmtBase  = ONE_A.mul(1_000); // 1000 TK0
@@ -2341,6 +2353,7 @@ describe("Vault", () => {
       await vault.connect(aliceSigner).depositWithPolicy(
         depositAmtBase,
         depositAmtQuote,
+        0, 0,
         supraArgs
       );
 
@@ -2412,7 +2425,7 @@ describe("Vault", () => {
       const decimalsB = await rewardB.decimals();
       const ONE_B = BigNumber.from(10).pow(decimalsB);
 
-      const VESTING_SECS = await vault.VESTING_SECS();
+      const VESTING_SECS = await vault.vestingSecs();
 
       // 1) Alice deposits 2000/2000, Bob deposits 1000/1000 → shares roughly 2:1
       const baseAlice  = ONE_A.mul(2_000);
@@ -2428,6 +2441,7 @@ describe("Vault", () => {
       await vault.connect(aliceSigner).depositWithPolicy(
         baseAlice,
         quoteAlice,
+        0, 0,
         supraArgs
       );
 
@@ -2439,6 +2453,7 @@ describe("Vault", () => {
       await vault.connect(bobSigner).depositWithPolicy(
         baseBob,
         quoteBob,
+        0, 0,
         supraArgs
       );
 
@@ -2548,7 +2563,7 @@ describe("Vault", () => {
       await token0.connect(aliceSigner).approve(vault.address, depositAmt);
       await token1.connect(aliceSigner).approve(vault.address, depositAmt);
 
-      await vault.connect(aliceSigner).depositWithPolicy(depositAmt, depositAmt, supraArgs);
+      await vault.connect(aliceSigner).depositWithPolicy(depositAmt, depositAmt, 0, 0, supraArgs);
 
       // --- Deploy a GOOD reward token (normal ERC20Mock) ---
       const ERC20MockFactory = await ethers.getContractFactory("ERC20Mock");
@@ -2867,7 +2882,7 @@ describe("Vault", () => {
         await token0.connect(aliceSigner).approve(vault.address, depositAmt);
         await token1.connect(aliceSigner).approve(vault.address, depositAmt);
 
-        await vault.connect(aliceSigner).depositWithPolicy(depositAmt, depositAmt, supraArgs);
+        await vault.connect(aliceSigner).depositWithPolicy(depositAmt, depositAmt, 0, 0, supraArgs);
 
         const aliceShares = await vault.userShares(aliceAddr);
         expect(aliceShares).to.be.gt(0);
@@ -2891,7 +2906,7 @@ describe("Vault", () => {
         await token0.connect(bobSigner).approve(vault.address, depositAmt);
         await token1.connect(bobSigner).approve(vault.address, depositAmt);
 
-        await vault.connect(bobSigner).depositWithPolicy(depositAmt, depositAmt, supraArgs);
+        await vault.connect(bobSigner).depositWithPolicy(depositAmt, depositAmt, 0, 0, supraArgs);
 
         const bobShares = await vault.userShares(bobAddr);
         expect(bobShares).to.be.gt(0);
@@ -2911,7 +2926,7 @@ describe("Vault", () => {
         const rewardToken = token1; // reward token to stream
         const ONE = BigNumber.from(10).pow(8); // 1e8
         const depositAmt = ONE.mul(1_000);
-        const vestingSecs = (await vault.VESTING_SECS()).toNumber();
+        const vestingSecs = (await vault.vestingSecs()).toNumber();
 
         // --- Alice deposits at t0 ---
         await token0.transfer(aliceAddr, depositAmt);
@@ -2919,7 +2934,7 @@ describe("Vault", () => {
         await token0.connect(aliceSigner).approve(vault.address, depositAmt);
         await token1.connect(aliceSigner).approve(vault.address, depositAmt);
 
-        await vault.connect(aliceSigner).depositWithPolicy(depositAmt, depositAmt, supraArgs);
+        await vault.connect(aliceSigner).depositWithPolicy(depositAmt, depositAmt, 0, 0, supraArgs);
 
         const aliceShares = await vault.userShares(aliceAddr);
         expect(aliceShares).to.be.gt(0);
@@ -2940,7 +2955,7 @@ describe("Vault", () => {
         await token0.connect(bobSigner).approve(vault.address, depositAmt);
         await token1.connect(bobSigner).approve(vault.address, depositAmt);
 
-        await vault.connect(bobSigner).depositWithPolicy(depositAmt, depositAmt, supraArgs);
+        await vault.connect(bobSigner).depositWithPolicy(depositAmt, depositAmt, 0, 0, supraArgs);
 
         const bobShares = await vault.userShares(bobAddr);
         // Equal deposits at 1:1 price -> should mint equal shares (assuming initOwnerBips == 0)
@@ -2986,7 +3001,7 @@ describe("Vault", () => {
         await token1.transfer(alice, depositAmt);
         await token0.connect(aliceSigner).approve(vault.address, depositAmt);
         await token1.connect(aliceSigner).approve(vault.address, depositAmt);
-        await vault.connect(aliceSigner).depositWithPolicy(depositAmt, depositAmt, supraArgs);
+        await vault.connect(aliceSigner).depositWithPolicy(depositAmt, depositAmt, 0, 0, supraArgs);
 
         // Fund rewards
         const rewardAmount = ONE.mul(1_000_000);
@@ -3004,7 +3019,7 @@ describe("Vault", () => {
         await token0.connect(bobSigner).approve(vault.address, depositAmt);
         await token1.connect(bobSigner).approve(vault.address, depositAmt);
 
-        await vault.connect(bobSigner).depositWithPolicy(depositAmt, depositAmt, supraArgs);
+        await vault.connect(bobSigner).depositWithPolicy(depositAmt, depositAmt, 0, 0, supraArgs);
 
         // Key anti-steal condition: after Bob's deposit, his perSharePaid must equal current perShare
         const R = await vault.rewards(rewardToken.address);
@@ -3027,7 +3042,7 @@ describe("Vault", () => {
         await token1.transfer(alice, depositAmt);
         await token0.connect(aliceSigner).approve(vault.address, depositAmt);
         await token1.connect(aliceSigner).approve(vault.address, depositAmt);
-        await vault.connect(aliceSigner).depositWithPolicy(depositAmt, depositAmt, supraArgs);
+        await vault.connect(aliceSigner).depositWithPolicy(depositAmt, depositAmt, 0, 0, supraArgs);
 
         // Fund rewards and run a bit
         const rewardAmount = ONE.mul(1_000_000);
@@ -3055,7 +3070,7 @@ describe("Vault", () => {
         await refreshOraclePrice1to1();
         await token0.connect(aliceSigner).approve(vault.address, depositAmt);
         await token1.connect(aliceSigner).approve(vault.address, depositAmt);
-        await vault.connect(aliceSigner).depositWithPolicy(depositAmt, depositAmt, supraArgs);
+        await vault.connect(aliceSigner).depositWithPolicy(depositAmt, depositAmt, 0, 0, supraArgs);
 
         // Anti-steal check: perSharePaid must be synced at re-entry
         const R = await vault.rewards(rewardToken.address);
@@ -3081,7 +3096,7 @@ describe("Vault", () => {
         await token1.transfer(alice, depositAmt);
         await token0.connect(aliceSigner).approve(vault.address, depositAmt);
         await token1.connect(aliceSigner).approve(vault.address, depositAmt);
-        await vault.connect(aliceSigner).depositWithPolicy(depositAmt, depositAmt, supraArgs);
+        await vault.connect(aliceSigner).depositWithPolicy(depositAmt, depositAmt, 0, 0, supraArgs);
 
         // Fund both reward streams
         const amt1 = ONE.mul(500_000);
@@ -3102,7 +3117,7 @@ describe("Vault", () => {
         await token1.transfer(bob, depositAmt);
         await token0.connect(bobSigner).approve(vault.address, depositAmt);
         await token1.connect(bobSigner).approve(vault.address, depositAmt);
-        await vault.connect(bobSigner).depositWithPolicy(depositAmt, depositAmt, supraArgs);
+        await vault.connect(bobSigner).depositWithPolicy(depositAmt, depositAmt, 0, 0, supraArgs);
 
         // Must sync for token1
         const R1 = await vault.rewards(token1.address);
@@ -3131,7 +3146,7 @@ describe("Vault", () => {
           await token1.transfer(addr, depositAmt);
           await token0.connect(signer).approve(vault.address, depositAmt);
           await token1.connect(signer).approve(vault.address, depositAmt);
-          await vault.connect(signer).depositWithPolicy(depositAmt, depositAmt, supraArgs);
+          await vault.connect(signer).depositWithPolicy(depositAmt, depositAmt, 0, 0, supraArgs);
         }
 
         // Fund rewards
@@ -3178,7 +3193,11 @@ describe("Vault", () => {
           token0.address,
           token1.address,
           distributor.address,
-          feeBips
+          feeBips,
+          WEEK_SECS,
+          DAY_SECS,
+          WEEK_SECS,
+          1000
         );
         await feeVault.deployed();
 
@@ -3188,7 +3207,7 @@ describe("Vault", () => {
         await token0.connect(aliceSigner).approve(feeVault.address, depositAmt);
         await token1.connect(aliceSigner).approve(feeVault.address, depositAmt);
 
-        await feeVault.connect(aliceSigner).depositWithPolicy(depositAmt, depositAmt, supraArgs);
+        await feeVault.connect(aliceSigner).depositWithPolicy(depositAmt, depositAmt, 0, 0, supraArgs);
 
         // Let 1 week pass, then trigger fee accrual via scheduleOwnerFeeBips()
         await network.provider.send("evm_increaseTime", [WEEK_SECS + 1]);
@@ -3212,7 +3231,7 @@ describe("Vault", () => {
         await distributor.fund(feeVault.address, reward.address, rewardAmount);
 
         // Jump to after the stream ends
-        const vesting = await feeVault.VESTING_SECS();
+        const vesting = await feeVault.vestingSecs();
         await network.provider.send("evm_increaseTime", [vesting.toNumber() + 3]);
         await network.provider.send("evm_mine");
 
@@ -3260,7 +3279,7 @@ describe("Vault", () => {
         await token0.connect(aliceSigner).approve(vault.address, depositAmt);
         await token1.connect(aliceSigner).approve(vault.address, depositAmt);
 
-        const depTx = await vault.connect(aliceSigner).depositWithPolicy(depositAmt, depositAmt, supraArgs);
+        const depTx = await vault.connect(aliceSigner).depositWithPolicy(depositAmt, depositAmt, 0, 0, supraArgs);
         const depRcpt = await depTx.wait();
 
         // Best effort: extract depositId from event; fallback to 0 if your event doesn't include it yet
@@ -3299,7 +3318,7 @@ describe("Vault", () => {
         expect(urAfter.accrued).to.equal(0);
 
         // And Alice should not earn anything further after she has exited (eligibleShares=0 → carry)
-        await network.provider.send("evm_increaseTime", [(await vault.VESTING_SECS()).toNumber()]);
+        await network.provider.send("evm_increaseTime", [(await vault.vestingSecs()).toNumber()]);
         await network.provider.send("evm_mine");
 
         const balMid = await reward.balanceOf(aliceAddr);
@@ -3322,7 +3341,7 @@ describe("Vault", () => {
         // totalToStream includes carryBefore + refill (inactive case => fresh 1-week stream).
         const Rafter = await vault.rewards(reward.address);
 
-        const vestingSecs = (await vault.VESTING_SECS()).toNumber();
+        const vestingSecs = (await vault.vestingSecs()).toNumber();
         const totalToStream = carryBefore.add(refill);
 
         // In the INACTIVE branch: rate = totalToStream / vestingSecs, carry = remainder.
@@ -3403,7 +3422,7 @@ describe("Vault", () => {
       // Ensure eligible shares > 0 before first fund (avoid any “no depositors yet” carry nuance)
       await token0.transfer(aliceAddr, depositUnit);
       await token1.transfer(aliceAddr, depositUnit);
-      await vault.connect(aliceSigner).depositWithPolicy(depositUnit, depositUnit, supraArgs);
+      await vault.connect(aliceSigner).depositWithPolicy(depositUnit, depositUnit, 0, 0, supraArgs);
 
       // Seed the vault with at least one reward token in the list
       await distributor.fund(vault.address, rewardA.address, ONE.mul(50_000));
@@ -3538,7 +3557,7 @@ describe("Vault", () => {
           const preShares = await vault.userShares(u.addr);
           const didJoinFromZero = preShares.eq(0);
 
-          const tx = await vault.connect(u.signer).depositWithPolicy(depositUnit, depositUnit, supraArgs);
+          const tx = await vault.connect(u.signer).depositWithPolicy(depositUnit, depositUnit, 0, 0, supraArgs);
           const rcpt = await tx.wait();
           const blk = await ethers.provider.getBlock(rcpt.blockNumber);
           const depositTs = blk!.timestamp;
@@ -3649,8 +3668,8 @@ describe("Vault", () => {
       const depositAmt = ONE.mul(1_000);          // 1000/1000
       const fundAmtA = ONE.mul(500_000);          // big enough to make rates noticeable
       const fundAmtB = ONE.mul(800_000);
-      const LOCKUP = (await vault.LOCKUP_SECS()).toNumber();
-      const VESTING = (await vault.VESTING_SECS()).toNumber();
+      const LOCKUP = (await vault.lockupSecs()).toNumber();
+      const VESTING = (await vault.vestingSecs()).toNumber();
 
       // Deploy 2 reward tokens (distinct from BASE/QUOTE)
       const ERC20MockFactory = await ethers.getContractFactory("ERC20Mock");
@@ -3676,7 +3695,7 @@ describe("Vault", () => {
 
       // --- Setup: Bob enters and stays (so stream has depositors even when Alice exits) ---
       await ensureUserHasDepositTokens(bobAddr, depositAmt);
-      await vault.connect(bobSigner).depositWithPolicy(depositAmt, depositAmt, supraArgs);
+      await vault.connect(bobSigner).depositWithPolicy(depositAmt, depositAmt, 0, 0, supraArgs);
       expect(await vault.userShares(bobAddr)).to.be.gt(0);
 
       // --- Fund both rewards to start streaming ---
@@ -3751,7 +3770,7 @@ describe("Vault", () => {
         if ((await vault.userShares(aliceAddr)).eq(0)) {
           await ensureUserHasDepositTokens(aliceAddr, depositAmt);
           await refreshOraclePrice1to1();
-          const tx = await vault.connect(aliceSigner).depositWithPolicy(depositAmt, depositAmt, supraArgs);
+          const tx = await vault.connect(aliceSigner).depositWithPolicy(depositAmt, depositAmt, 0, 0, supraArgs);
           await tx.wait();
         }
 
@@ -3793,7 +3812,7 @@ describe("Vault", () => {
         await ensureUserHasDepositTokens(aliceAddr, depositAmt);
         await refreshOraclePrice1to1();
 
-        const depTx = await vault.connect(aliceSigner).depositWithPolicy(depositAmt, depositAmt, supraArgs);
+        const depTx = await vault.connect(aliceSigner).depositWithPolicy(depositAmt, depositAmt, 0, 0, supraArgs);
         const depRcpt = await depTx.wait();
         const depBlk = await ethers.provider.getBlock(depRcpt.blockNumber);
         const depTs = depBlk!.timestamp;
@@ -3827,9 +3846,10 @@ describe("Vault", () => {
       expect(bobA).to.be.gte(aliceA);
     });
   });
-  describe("virtual shares mitigation (donation / inflation attack)", () => {
+  describe.only("virtual shares mitigation (donation / inflation attack)", () => {
     const PAIR_ID = 1;
     const ONE = BigNumber.from(10).pow(8);
+    const DECIMAL = 8
 
     // Must match your Solidity constants:
     const VIRTUAL_SHARES = BigNumber.from(1_000);
@@ -3845,7 +3865,7 @@ describe("Vault", () => {
         [PAIR_ID],
         [ONE],
         [ts],
-        [ONE],
+        [DECIMAL],
         [0]
       );
     }
@@ -3887,7 +3907,7 @@ describe("Vault", () => {
       const supplyBefore = await vault.totalShares();
       expect(supplyBefore).to.equal(0);
 
-      const tx = await vault.connect(alice).depositWithPolicy(depositBaseMax, depositQuoteMax, supraArgs);
+      const tx = await vault.connect(alice).depositWithPolicy(depositBaseMax, depositBaseMax, 0, 0, supraArgs);
       const rcpt = await tx.wait();
       const dep = await parseDepositedPolicy(rcpt);
 
@@ -3931,7 +3951,7 @@ describe("Vault", () => {
 
       await refreshOracle1to1();
 
-      const tx1 = await vault.connect(alice).depositWithPolicy(small, small, supraArgs);
+      const tx1 = await vault.connect(alice).depositWithPolicy(small, small, 0, 0, supraArgs);
       const rcpt1 = await tx1.wait();
       const dep1 = await parseDepositedPolicy(rcpt1);
 
@@ -3956,7 +3976,7 @@ describe("Vault", () => {
 
       const supplyBeforeBob = await vault.totalShares();
 
-      const tx2 = await vault.connect(bob).depositWithPolicy(small, small, supraArgs);
+      const tx2 = await vault.connect(bob).depositWithPolicy(small, small, 0, 0, supraArgs);
       const rcpt2 = await tx2.wait();
       const dep2 = await parseDepositedPolicy(rcpt2);
 
