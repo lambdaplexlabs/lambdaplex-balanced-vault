@@ -3,6 +3,7 @@ import { expect } from "chai";
 import { ethers, network } from "hardhat";
 import { BigNumber, Signer } from "ethers";
 import { AirdropDistributor, ERC20Mock, MockSupraPriceFeed, PLEXPairVault, SupraRegistry } from "../typechain-types";
+import { anyValue } from "@nomicfoundation/hardhat-chai-matchers/withArgs";
 
 describe("Vault", () => {
   let deployer: Signer;
@@ -35,6 +36,12 @@ describe("Vault", () => {
   async function setNextBlockTimestamp(ts: number) {
     await network.provider.send("evm_setNextBlockTimestamp", [ts]);
     await network.provider.send("evm_mine");
+  }
+
+  // for integer rounding for equality checks
+  function isWithinOne(a: BigNumber, b: BigNumber): boolean {
+    const absDiff =  a.gte(b) ? a.sub(b) : b.sub(a);
+    return absDiff <= BigNumber.from(1);
   }
 
   beforeEach(async () => {
@@ -390,7 +397,7 @@ describe("Vault", () => {
       await refreshOracleToNowAtOneToOne();
 
       // redeem ALL owner fee‑shares
-      await vault.connect(deployer).ownerRedeemFees(feeShares, supraArgs);
+      await vault.connect(deployer).ownerRedeemFees(feeShares, 0, 0, supraArgs);
 
       const ownerBaseAfter = await token0.balanceOf(ownerAddr);
       const ownerQuoteAfter = await token1.balanceOf(ownerAddr);
@@ -402,12 +409,12 @@ describe("Vault", () => {
       expect(deltaBase.add(deltaQuote)).to.be.gt(0);
 
       // 2) In a balanced inventory at price=1, payout should be 50/50 by value ⇒ equal units
-      expect(deltaBase).to.equal(deltaQuote);
+      expect(isWithinOne(deltaBase, deltaQuote)).to.eq(true);
 
       // 3) Vault should remain balanced after redemption
       const baseBalAfter = await token0.balanceOf(vault.address);
       const quoteBalAfter = await token1.balanceOf(vault.address);
-      expect(baseBalAfter).to.equal(quoteBalAfter);
+      expect(isWithinOne(baseBalAfter, quoteBalAfter)).to.eq(true);
     });
 
     it("ownerRedeemFees pays overweight token first, then 50/50 when inventory is imbalanced", async () => {
@@ -438,7 +445,7 @@ describe("Vault", () => {
       await refreshOracleToNowAtOneToOne();
 
       // redeem all fee‑shares
-      await vault.connect(deployer).ownerRedeemFees(feeShares, supraArgs);
+      await vault.connect(deployer).ownerRedeemFees(feeShares, 0, 0, supraArgs);
 
       const ownerBaseAfter = await token0.balanceOf(ownerAddr);
       const ownerQuoteAfter = await token1.balanceOf(ownerAddr);
@@ -727,6 +734,10 @@ describe("Vault", () => {
       const amount1 = ethers.utils.parseUnits("1000", 8); // 1000 TK0 + 1000 TK1
       const amount2 = ethers.utils.parseUnits("2000", 8); // 2000 TK0 + 2000 TK1
 
+      // --- virtual offset constants (must match contract) ---
+      const VIRTUAL_SHARES = BigNumber.from(1_000);
+      const VIRTUAL_VALUEQ = BigNumber.from(1);
+
       // Fund & approve Alice
       await token0.transfer(aliceAddr, amount1);
       await token1.transfer(aliceAddr, amount1);
@@ -739,38 +750,55 @@ describe("Vault", () => {
       await token0.connect(bobSigner).approve(vault.address, amount2);
       await token1.connect(bobSigner).approve(vault.address, amount2);
 
-      // ---- First deposit (vault empty → TVL=0) ----
+      // ---- First deposit (vault empty → tvlQBefore=0, supplyBefore=0) ----
       // price = 1:1, so principalQ = base + quote
-      const principal1 = amount1.mul(2); // 1000 + 1000
+      const principal1 = amount1.mul(2); // 1000 + 1000 in QUOTE-units (since price=1)
+
+      // expectedShares1 = principal1 * (0 + VIRTUAL_SHARES) / (0 + VIRTUAL_VALUEQ)
+      const expectedShares1 = principal1.mul(VIRTUAL_SHARES).div(VIRTUAL_VALUEQ);
 
       await vault.connect(aliceSigner).depositWithPolicy(amount1, amount1, supraArgs);
 
       const totalSharesAfter1 = await vault.totalShares();
       const aliceShares = await vault.userShares(aliceAddr);
 
-      expect(totalSharesAfter1).to.equal(principal1);
-      expect(aliceShares).to.equal(principal1);
+      expect(totalSharesAfter1).to.equal(expectedShares1);
+      expect(aliceShares).to.equal(expectedShares1);
 
       // Also check deposit struct
       const dep0 = await vault.deposits(0);
       expect(dep0.user).to.equal(aliceAddr);
-      expect(dep0.shares).to.equal(principal1);
+      expect(dep0.shares).to.equal(expectedShares1);
 
       // ---- Second deposit (vault already balanced) ----
-      // TVL (QUOTE terms) before Bob's deposit = principal1
-      // principalQ2 = amount2 + amount2 = 4000
-      // minted2 = principalQ2 * totalSharesBefore / tvlQBefore = 4000 * 2000 / 2000 = 4000
       const principal2 = amount2.mul(2); // 2000 + 2000
-      const totalBefore2 = await vault.totalShares();
-      expect(totalBefore2).to.equal(principal1); // sanity
+
+      // Supply before Bob's deposit
+      const supplyBefore2 = await vault.totalShares();
+
+      // TVL before Bob's deposit (QUOTE terms).
+      // With 1:1 price and equal decimals, tvlQ = baseBal + quoteBal.
+      const baseBalBefore2 = await token0.balanceOf(vault.address);
+      const quoteBalBefore2 = await token1.balanceOf(vault.address);
+      const tvlQBefore2 = baseBalBefore2.add(quoteBalBefore2);
+
+      // expectedShares2 = principal2 * (supplyBefore2 + VIRTUAL_SHARES) / (tvlQBefore2 + VIRTUAL_VALUEQ)
+      const expectedShares2 = principal2
+        .mul(supplyBefore2.add(VIRTUAL_SHARES))
+        .div(tvlQBefore2.add(VIRTUAL_VALUEQ));
 
       await vault.connect(bobSigner).depositWithPolicy(amount2, amount2, supraArgs);
 
       const totalSharesAfter2 = await vault.totalShares();
       const bobShares = await vault.userShares(bobAddr);
 
-      expect(bobShares).to.equal(principal2);
-      expect(totalSharesAfter2).to.equal(principal1.add(principal2));
+      expect(bobShares).to.equal(expectedShares2);
+      expect(totalSharesAfter2).to.equal(supplyBefore2.add(expectedShares2));
+
+      // Optional: check Bob deposit struct (depositId should be 1)
+      const dep1 = await vault.deposits(1);
+      expect(dep1.user).to.equal(bobAddr);
+      expect(dep1.shares).to.equal(expectedShares2);
     });
 
     it("accepts only a 50/50-by-value split when the vault is balanced", async () => {
@@ -1527,7 +1555,7 @@ describe("Vault", () => {
           const totalOut   = deltaBase.add(deltaQuote);
 
           // In a balanced vault with price=1, withdrawal payout must be 50/50 by value → equal units
-          expect(deltaBase).to.equal(deltaQuote);
+          expect(isWithinOne(deltaBase, deltaQuote)).to.eq(true)
 
           // User's shares are fully burned
           expect(await vault.userShares(aliceAddr)).to.equal(0);
@@ -1763,11 +1791,11 @@ describe("Vault", () => {
       const deltaQuote = quoteAfter.sub(quoteBefore);
 
       // 1) Total value must match owedValueQ
-      expect(deltaBase.add(deltaQuote)).to.equal(owedValueQ);
+      expect(isWithinOne(deltaBase.add(deltaQuote), owedValueQ)).to.eq(true);
 
       // 2) The split must match our simulated overweight-then-50/50 logic
-      expect(deltaBase).to.equal(expectedBasePay);
-      expect(deltaQuote).to.equal(expectedQuotePay);
+      expect(isWithinOne(deltaBase, expectedBasePay)).to.eq(true);
+      expect(isWithinOne(deltaQuote, expectedQuotePay)).to.eq(true);
 
       // 3) Since BASE is overweight, the user should receive *more* BASE than QUOTE in this withdraw
       expect(deltaBase.gte(deltaQuote)).to.equal(true);
@@ -1880,11 +1908,11 @@ describe("Vault", () => {
       const deltaQuote = quoteAfter.sub(quoteBefore);
 
       // 1) Total value must match owedValueQ
-      expect(deltaBase.add(deltaQuote)).to.equal(owedValueQ);
+      expect(isWithinOne(deltaBase.add(deltaQuote), owedValueQ)).to.eq(true)
 
       // 2) The split must match our simulated QUOTE-overweight logic
-      expect(deltaBase).to.equal(expectedBasePay);
-      expect(deltaQuote).to.equal(expectedQuotePay);
+      expect(isWithinOne(deltaBase, expectedBasePay)).to.eq(true)
+      expect(isWithinOne(deltaQuote, expectedQuotePay)).to.eq(true)
 
       // 3) Because QUOTE is overweight, user should receive >= QUOTE than BASE in units
       expect(deltaQuote.gte(deltaBase)).to.equal(true);
@@ -2409,6 +2437,93 @@ describe("Vault", () => {
       // 3) Alice gets more of each reward token than Bob (since she has more shares)
       expect(a_deltaA.gt(b_deltaA)).to.be.true;
       expect(a_deltaB.gt(b_deltaB)).to.be.true;
+    });
+    it("claimAllRewards does not revert if one reward token claim fails; emits RewardClaimFailed and keeps accrued intact", async () => {
+      const [, aliceSigner] = await ethers.getSigners();
+      const aliceAddr = await aliceSigner.getAddress();
+
+      const ONE = BigNumber.from(10).pow(8);
+      const depositAmt = ONE.mul(1_000);
+
+      // --- Alice deposits so she has eligible shares ---
+      await token0.transfer(aliceAddr, depositAmt);
+      await token1.transfer(aliceAddr, depositAmt);
+      await token0.connect(aliceSigner).approve(vault.address, depositAmt);
+      await token1.connect(aliceSigner).approve(vault.address, depositAmt);
+
+      await vault.connect(aliceSigner).depositWithPolicy(depositAmt, depositAmt, supraArgs);
+
+      // --- Deploy a GOOD reward token (normal ERC20Mock) ---
+      const ERC20MockFactory = await ethers.getContractFactory("ERC20Mock");
+      const goodReward = (await ERC20MockFactory.deploy(
+        "GoodReward",
+        "GOOD",
+        8,
+        INITIAL_MINT
+      )) as ERC20Mock;
+      await goodReward.deployed();
+
+      // --- Deploy a BAD reward token that fails on transfer() when Distributor calls it ---
+      const BadRewardTokenFactory = await ethers.getContractFactory("BadRewardToken");
+      const badReward = await BadRewardTokenFactory.deploy(
+        "BadReward",
+        "BAD",
+        8,
+        distributor.address,              // blockedSender = distributor
+        ethers.utils.parseUnits("1000000000", 8) // mint plenty to deployer
+      );
+      await badReward.deployed();
+
+      // If your distributor enforces allow-listing, allow these tokens
+      // (remove these two lines if your distributor doesn't have modifyAllowed)
+      await distributor.modifyAllowed(goodReward.address, true);
+      await distributor.modifyAllowed(badReward.address, true);
+
+      // --- Fund BOTH reward tokens (so vault lists them + starts streams) ---
+      const rewardAmount = ONE.mul(1_000_000); // 1,000,000 tokens (1e14 units at 8 decimals)
+
+      await goodReward.approve(distributor.address, rewardAmount);
+      await distributor.fund(vault.address, goodReward.address, rewardAmount);
+
+      await badReward.approve(distributor.address, rewardAmount);
+      await distributor.fund(vault.address, badReward.address, rewardAmount);
+
+      // Let rewards accrue so claim amounts are > 0
+      await increaseTime(DAY_SECS); // 1 day
+
+      // sanity: Alice has 0 reward balances before claim
+      expect(await goodReward.balanceOf(aliceAddr)).to.equal(0);
+      expect(await badReward.balanceOf(aliceAddr)).to.equal(0);
+
+      // --- claimAllRewards should NOT revert ---
+      const tx = await vault.connect(aliceSigner).claimAllRewards();
+
+      // One succeeds
+      await expect(tx)
+        .to.emit(vault, "RewardClaimed")
+        .withArgs(goodReward.address, aliceAddr, anyValue);
+
+      // One fails gracefully
+      await expect(tx)
+        .to.emit(vault, "RewardClaimFailed")
+        .withArgs(badReward.address, aliceAddr, anyValue);
+
+      await tx.wait();
+
+      // Alice actually received GOOD rewards
+      expect(await goodReward.balanceOf(aliceAddr)).to.be.gt(0);
+
+      // Alice received ZERO BAD rewards because distributor->transfer() failed
+      expect(await badReward.balanceOf(aliceAddr)).to.equal(0);
+
+      // After claimAllRewards:
+      // - GOOD accrued should be cleared
+      // - BAD accrued should remain for retry
+      const goodState = await vault.userRewards(aliceAddr, goodReward.address);
+      const badState = await vault.userRewards(aliceAddr, badReward.address);
+
+      expect(goodState.accrued).to.equal(0);
+      expect(badState.accrued).to.be.gt(0);
     });
     describe("airdrop rewards: onAirdropFunded access control & input sanity", () => {
       it("reverts if called by a non‑distributor", async () => {
@@ -3611,6 +3726,158 @@ describe("Vault", () => {
       const bobA = await rewardA.balanceOf(bobAddr);
       const aliceA = await rewardA.balanceOf(aliceAddr);
       expect(bobA).to.be.gte(aliceA);
+    });
+  });
+  describe("virtual shares mitigation (donation / inflation attack)", () => {
+    const PAIR_ID = 1;
+    const ONE = BigNumber.from(10).pow(8);
+
+    // Must match your Solidity constants:
+    const VIRTUAL_SHARES = BigNumber.from(1_000);
+    const VIRTUAL_VALUEQ = BigNumber.from(1);
+
+    async function refreshOracle1to1() {
+      const latest = await ethers.provider.getBlock("latest");
+      const ts = latest!.timestamp;
+
+      // rawPrice = 1e8, scale = 1e8 => 1.0
+      await mockSupra.setPriceInfo(
+        PAIR_ID,
+        [PAIR_ID],
+        [ONE],
+        [ts],
+        [ONE],
+        [0]
+      );
+    }
+
+    function pow10(d: number) {
+      return BigNumber.from(10).pow(d);
+    }
+
+    async function parseDepositedPolicy(receipt: any) {
+      const ev = receipt.events?.find((e: any) => e.event === "DepositedPolicy");
+      expect(ev, "DepositedPolicy event not found").to.exist;
+      const args = ev.args;
+
+      // event DepositedPolicy(address user, uint256 depositId, uint256 baseIn, uint256 quoteIn, uint256 sharesMinted, uint256 tvlQuoteBefore)
+      return {
+        user: args.user,
+        depositId: args.depositId,
+        baseIn: args.baseIn,
+        quoteIn: args.quoteIn,
+        sharesMinted: args.sharesMinted,
+        tvlQuoteBefore: args.tvlQuoteBefore,
+      };
+    }
+
+    it("first deposit mints using virtual offset: shares = valueQ*(S+VS)/(TVL+VV)", async () => {
+      const aliceAddr = await alice.getAddress();
+
+      const depositBaseMax = ONE;  // 1 BASE token
+      const depositQuoteMax = ONE; // 1 QUOTE token
+
+      // fund + approve
+      await token0.transfer(aliceAddr, depositBaseMax);
+      await token1.transfer(aliceAddr, depositQuoteMax);
+      await token0.connect(alice).approve(vault.address, depositBaseMax);
+      await token1.connect(alice).approve(vault.address, depositQuoteMax);
+
+      await refreshOracle1to1();
+
+      const supplyBefore = await vault.totalShares();
+      expect(supplyBefore).to.equal(0);
+
+      const tx = await vault.connect(alice).depositWithPolicy(depositBaseMax, depositQuoteMax, supraArgs);
+      const rcpt = await tx.wait();
+      const dep = await parseDepositedPolicy(rcpt);
+
+      // For the first deposit on a fresh vault, tvlQuoteBefore should be 0
+      expect(dep.tvlQuoteBefore).to.equal(0);
+
+      // Recompute the price the vault should be using (normal orientation, equal decimals in your tests)
+      const dBase = await token0.decimals();
+      const dQuote = await token1.decimals();
+
+      const rawPrice = ONE; // from mock oracle
+      const scale = ONE;    // from mock oracle
+
+      // price = rawPrice * 10^dQuote / 10^dBase
+      const price = rawPrice.mul(pow10(dQuote)).div(pow10(dBase));
+
+      // principalQ = baseIn*price/scale + quoteIn
+      const principalQ = dep.baseIn.mul(price).div(scale).add(dep.quoteIn);
+
+      // expectedShares = principalQ*(supplyBefore+VS)/(tvlBefore+VV)
+      const expectedShares = principalQ
+        .mul(supplyBefore.add(VIRTUAL_SHARES))
+        .div(dep.tvlQuoteBefore.add(VIRTUAL_VALUEQ));
+
+      expect(dep.sharesMinted).to.equal(expectedShares);
+
+      // If your constants are VS=1000, VV=1 and TVL=0, this should be principalQ*1000
+      expect(dep.sharesMinted).to.equal(principalQ.mul(1_000));
+    });
+
+    it("prevents classic donation attack: after huge donation, a tiny depositor still gets >0 shares", async () => {
+      const aliceAddr = await alice.getAddress();
+      const bobAddr = await bob.getAddress();
+      const small = ONE; // 1 token each (1e8 units)
+
+      // --- Alice first deposit (small) ---
+      await token0.transfer(aliceAddr, small);
+      await token1.transfer(aliceAddr, small);
+      await token0.connect(alice).approve(vault.address, small);
+      await token1.connect(alice).approve(vault.address, small);
+
+      await refreshOracle1to1();
+
+      const tx1 = await vault.connect(alice).depositWithPolicy(small, small, supraArgs);
+      const rcpt1 = await tx1.wait();
+      const dep1 = await parseDepositedPolicy(rcpt1);
+
+      // With 1:1 price and equal decimals in tests:
+      const alicePrincipalQ = dep1.baseIn.add(dep1.quoteIn);
+
+      // Sanity: fixed vault mints ~principalQ*1000 on first deposit
+      expect(dep1.sharesMinted).to.equal(alicePrincipalQ.mul(VIRTUAL_SHARES).div(VIRTUAL_VALUEQ));
+
+      // --- Huge donation directly to vault (no shares minted) ---
+      const donation = ONE.mul(300_000_000); // 300M tokens each side
+      await token0.connect(deployer).transfer(vault.address, donation);
+      await token1.connect(deployer).transfer(vault.address, donation);
+
+      // --- Bob tries to deposit tiny amount ---
+      await token0.transfer(bobAddr, small);
+      await token1.transfer(bobAddr, small);
+      await token0.connect(bob).approve(vault.address, small);
+      await token1.connect(bob).approve(vault.address, small);
+
+      await refreshOracle1to1();
+
+      const supplyBeforeBob = await vault.totalShares();
+
+      const tx2 = await vault.connect(bob).depositWithPolicy(small, small, supraArgs);
+      const rcpt2 = await tx2.wait();
+      const dep2 = await parseDepositedPolicy(rcpt2);
+
+      // Must not be 0 shares (this was the practical "shares=0" griefing vector)
+      expect(dep2.sharesMinted).to.be.gt(0);
+
+      // Strong check: minted shares match the *current* virtual offset formula
+      const bobPrincipalQ = dep2.baseIn.add(dep2.quoteIn); // price=1 in this test
+      const expectedSharesNew = bobPrincipalQ
+        .mul(supplyBeforeBob.add(VIRTUAL_SHARES))
+        .div(dep2.tvlQuoteBefore.add(VIRTUAL_VALUEQ));
+
+      expect(dep2.sharesMinted).to.equal(expectedSharesNew);
+
+      // Now simulate the *vulnerable* vault behavior:
+      // In the old vulnerable vault, Alice would have minted 1:1 (supply=principalQ).
+      const vulnerableSupplyAfterAlice = alicePrincipalQ; // <-- key difference
+      const vulnerableSharesBob = bobPrincipalQ.mul(vulnerableSupplyAfterAlice).div(dep2.tvlQuoteBefore);
+
+      expect(vulnerableSharesBob).to.equal(BigNumber.from(0));
     });
   });
 });

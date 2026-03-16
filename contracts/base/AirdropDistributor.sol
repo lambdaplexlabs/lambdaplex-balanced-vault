@@ -97,8 +97,10 @@ contract AirdropDistributor is Ownable, ReentrancyGuard {
 
     function associateToken(address token) external onlyOwner() {
         // Only owner may associate tokens
-        ( , bytes memory result) = address(0x167).call(abi.encodeWithSignature("associateToken(address,address)", address(this), token));
-        require (abi.decode(result, (int32)) == 22);
+        (bool success , bytes memory result) = address(0x167).call(abi.encodeWithSignature("associateToken(address,address)", address(this), token));
+        require(success, "HTS Precompile: CALL_EXCEPTION");
+        int32 responseCode = abi.decode(result, (int32));
+        require(responseCode == 22, "HTS Precompile: CALL_ERROR");
     }
 
     function modifyAllowed(address token, bool allowed) public onlyOwner() {
@@ -107,9 +109,11 @@ contract AirdropDistributor is Ownable, ReentrancyGuard {
     }
 
     function dissociateToken(address token) external onlyOwner() {
-        // Only owner may disassociate tokens
-        ( , bytes memory result) = address(0x167).call(abi.encodeWithSignature("disassociateToken(address,address)", address(this), token));
-        require (abi.decode(result, (int32)) == 22);
+        // Only owner may dissociate tokens
+        (bool success , bytes memory result) = address(0x167).call(abi.encodeWithSignature("dissociateToken(address,address)", address(this), token));
+        require(success, "HTS Precompile: CALL_EXCEPTION");
+        int32 responseCode = abi.decode(result, (int32));
+        require(responseCode == 22, "HTS Precompile: CALL_ERROR");
         modifyAllowed(token, false);
     }
 }

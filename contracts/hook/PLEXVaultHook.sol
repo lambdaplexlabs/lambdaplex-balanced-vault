@@ -13,7 +13,7 @@ import '../libraries/PRBMathCommon.sol';
 import '../libraries/PrefixDecoder.sol';
 import '../interfaces/ISupraRegistry.sol';
 
-contract OrderFlowAllowance is IHieroAccountAllowanceHook {
+contract PLEXVaultHook is IHieroAccountAllowanceHook {
     using SafeERC20 for IERC20;
     using DetailDecoder for uint256;
     using PrefixDecoder for uint256;
@@ -24,7 +24,7 @@ contract OrderFlowAllowance is IHieroAccountAllowanceHook {
     ISupraRegistry public immutable supra = ISupraRegistry(address(0x00000000000000000000000000000000000003f7));
     IPLEXBrokerRegistry public immutable broker = IPLEXBrokerRegistry(address(0x00000000000000000000000000000000000003f9));
 
-error Fail(bytes32 prefix, string reason);
+    error Fail(bytes32 prefix, string reason);
     mapping(bytes32 => bytes32) public orders;
 
     struct BatchState {
@@ -46,6 +46,7 @@ error Fail(bytes32 prefix, string reason);
     ) external payable override returns (bool) {
         bytes memory args = context.data;
         require(args.length >= 32, "args too short");
+        require(broker.isBroker(msg.sender), 'not broker');
         _validateForCustomFee(proposedTransfers);
 
         BatchState memory st;
@@ -153,6 +154,7 @@ error Fail(bytes32 prefix, string reason);
     ) private returns (uint256 factorBps) {
         ISupraRegistry.PriceInfo memory pi = supra.verifyOracleProofV2(proof);
         require(pi.pairs.length == 1, "oracle: pair length");
+        require(pi.prices[0] > 0, "oracle: price=0");
         require(
             pi.timestamp[0] <= block.timestamp &&
             pi.timestamp[0] >= block.timestamp - STALE_PRICE,

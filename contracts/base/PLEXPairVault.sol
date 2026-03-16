@@ -2,6 +2,7 @@
 pragma solidity ^0.8.24;
 
 import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import "../libraries/PRBMathCommon.sol";
 import "../interfaces/IERC20.sol";
 import "../interfaces/ISupraRegistry.sol";
@@ -61,7 +62,7 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
         
     address public immutable ORACLE_BASE;
     address public immutable ORACLE_QUOTE;
-    uint256 constant STALE_PRICE = 60;
+    uint256 constant STALE_PRICE = 30;
 
     // Distributor that custodies reward tokens and pays on claim
     IAirdropDistributor public distributor;
@@ -76,6 +77,13 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
     /* ── Global math scales ── */
     uint256 public constant BPS = 1_000_000; // 1e6 = 100%
     uint64 public constant WEEK_SECS = 7 days;
+
+    /* ── Max reward token to prevent unbounded array growth ── */
+    uint256 public constant MAX_REWARD_TOKENS = 30;
+
+    /* ── Donation/inflation mitigation (ERC4626-style virtual offset) ── */
+    uint256 private constant VIRTUAL_SHARES = 1e3;
+    uint256 private constant VIRTUAL_VALUEQ = 1;
 
     /* ── Shares (global) ── */
     uint256 public totalShares;
@@ -184,6 +192,11 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
     event RewardClaimed(
         address indexed rewardToken,
         address indexed user,
+        uint256 amount
+    );
+    event RewardClaimFailed(
+        address indexed rewardToken, 
+        address indexed user, 
         uint256 amount
     );
 
@@ -389,6 +402,25 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
         }
     }
 
+    /* ───────────────────────── Virtual share helpers ───────────────────────── */
+    function _valueQToShares(uint256 valueQ, uint256 tvlQ, uint256 supply)
+        internal
+        pure
+        returns (uint256)
+    {
+        // shares = valueQ * (supply + VIRTUAL_SHARES) / (tvlQ + VIRTUAL_VALUEQ)
+        return PRBMathCommon.mulDiv(valueQ, supply + VIRTUAL_SHARES, tvlQ + VIRTUAL_VALUEQ);
+    }
+
+    function _sharesToValueQ(uint256 shares, uint256 tvlQ, uint256 supply)
+        internal
+        pure
+        returns (uint256)
+    {
+        // valueQ = shares * (tvlQ + VIRTUAL_VALUEQ) / (supply + VIRTUAL_SHARES)
+        return PRBMathCommon.mulDiv(shares, tvlQ + VIRTUAL_VALUEQ, supply + VIRTUAL_SHARES);
+    }
+
     /// @dev True if |imbalance| <= tolerance * TVL.
     function _isBalanced(
         uint256 tvlQ,
@@ -478,6 +510,7 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
     function _ensureListedReward(address rt) internal {
         for (uint i = 0; i < rewardTokens.length; i++)
             if (rewardTokens[i] == rt) return;
+        require(rewardTokens.length < MAX_REWARD_TOKENS, "too many reward tokens");
         rewardTokens.push(rt);
     }
 
@@ -498,7 +531,7 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
             if (dt > 0) {
                 uint256 eligible = _eligibleShares();
                 if (eligible == 0) {
-                    R.carry += uint128(R.rate * dt);
+                    R.carry += SafeCast.toUint128(R.rate * dt);
                 } else {
                     R.perShare += (R.rate * dt * 1e18) / eligible;
                 }
@@ -564,7 +597,7 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
             // ACTIVE: keep finish, raise rate over remaining time
             uint256 remainingTime = uint256(R.periodFinish - nowU64);
             R.rate = totalToStream / remainingTime;
-            R.carry = uint128(totalToStream - R.rate * remainingTime);
+            R.carry = SafeCast.toUint128(totalToStream - R.rate * remainingTime);
             R.lastUpdate = nowU64; // finish unchanged
             emit RewardStreamConfigured(
                 rewardToken,
@@ -576,7 +609,7 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
         } else {
             // INACTIVE: start fresh 1-week stream
             R.rate = totalToStream / VESTING_SECS;
-            R.carry = uint128(totalToStream - R.rate * VESTING_SECS);
+            R.carry = SafeCast.toUint128(totalToStream - R.rate * VESTING_SECS);
             R.lastUpdate = nowU64;
             R.periodFinish = nowU64 + VESTING_SECS;
             emit RewardStreamConfigured(
@@ -611,13 +644,16 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
             UserReward storage U = userRewards[msg.sender][rt];
             uint256 amt = U.accrued;
             if (amt > 0) {
-                U.accrued = 0;
-                distributor.claimTo(rt, msg.sender, amt);
-                emit RewardClaimed(rt, msg.sender, amt);
+                try distributor.claimTo(rt, msg.sender, amt) {
+                    U.accrued = 0;
+                    emit RewardClaimed(rt, msg.sender, amt);
+                } catch {
+                    emit RewardClaimFailed(rt, msg.sender, amt);
+                // Leave U.accrued intact for retry via claimRewards(rt)
+                }
             }
         }
     }
-
     /* ───────────────────────── Views ───────────────────────── */
 
     function depositsLength() external view returns (uint256) {
@@ -684,8 +720,9 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
             int256 imb
         ) = _inventoryValues(price, scale);
 
+        uint256 tsBefore = totalShares;
         // Pro-rata value owed (QUOTE terms)
-        uint256 valueOutQ = (tvlQ * shares) / totalShares; // or Math.mulDiv(tvlQ, shares, totalShares)
+        uint256 valueOutQ = _sharesToValueQ(shares, tvlQ, tsBefore);
 
         // One source of truth: handles both balanced & imbalanced
         return
@@ -861,7 +898,6 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
     ) external payable nonReentrant returns(uint256) {
         require(!emergencyMode, "emergency: deposits disabled");
         _accrueMgmtFee(); // checkpoint fee‑shares first
-
         (uint256 price, uint256 scale) = _getPriceAndScale(supraArgs);
 
         // Preview what we will accept right now
@@ -913,10 +949,10 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
         // Settle rewards for user before mutating (rewards accrue immediately)
         _settleRewards(msg.sender);
 
-        // Mint shares
-        uint256 sh = (totalShares == 0 || tvlQBefore == 0)
-            ? principalQ
-            : (principalQ * totalShares) / tvlQBefore;
+        uint256 supplyBefore = totalShares;
+
+        // Mint shares using virtual offset mitigation
+        uint256 sh = _valueQToShares(principalQ, tvlQBefore, supplyBefore);
         require(sh > 0, "shares=0");
         require(sh <= type(uint96).max, "shares overflow");
 
@@ -946,52 +982,52 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
     ///         - If imbalanced: pays from overweight token first (fallback to the other).
     ///         - If balanced: pays 50/50 by value.
     function withdrawFromDeposit(
-    uint256 depositId,
-    uint256 sharesToBurn,
-    bytes memory supraArgs
-) public nonReentrant {
-    _accrueMgmtFee(); // checkpoint fee‑shares first
+        uint256 depositId,
+        uint256 sharesToBurn,
+        bytes memory supraArgs
+    ) public nonReentrant {
+        _accrueMgmtFee(); // checkpoint fee‑shares first
 
-    Deposit storage d = deposits[depositId];
-    address user = d.user;                                 // <-- capture early
-    require(user == msg.sender, "not owner");
-    require(d.state == uint8(DepState.ACTIVE), "withdrawn");
-    require(block.timestamp >= d.lockupUntil, "locked");
-    require(sharesToBurn > 0 && sharesToBurn <= uint256(d.shares), "bad shares");
+        Deposit storage d = deposits[depositId];
+        address user = d.user;
+        require(user == msg.sender, "not owner");
+        require(d.state == uint8(DepState.ACTIVE), "withdrawn");
+        require(block.timestamp >= d.lockupUntil, "locked");
+        require(sharesToBurn > 0 && sharesToBurn <= uint256(d.shares), "bad shares");
 
-    // Settle streaming rewards before burning shares
-    _settleRewards(user);
+        // Settle streaming rewards before burning shares
+        _settleRewards(user);
 
-    uint256 sh = sharesToBurn;
-    uint256 tsBefore = totalShares;
-    require(tsBefore >= sh, "supply");
+        uint256 sh = sharesToBurn;
+        uint256 tsBefore = totalShares;
+        require(tsBefore >= sh, "supply");
 
-    (uint256 price, uint256 scale) = _getPriceAndScale(supraArgs);
+        (uint256 price, uint256 scale) = _getPriceAndScale(supraArgs);
 
-    (uint256 baseBal, uint256 quoteBal, , , uint256 tvlQ, int256 imb)
-        = _inventoryValues(price, scale);
+        (uint256 baseBal, uint256 quoteBal, , , uint256 tvlQ, int256 imb)
+            = _inventoryValues(price, scale);
 
-    uint256 valueOutQ = (tvlQ * sh) / tsBefore;
+        uint256 valueOutQ = _sharesToValueQ(sh, tvlQ, tsBefore);
 
-    (uint256 payBase, uint256 payQuote) = _payoutOverweightThenBalanced(
-        valueOutQ, price, scale, baseBal, quoteBal, imb
-    );
+        (uint256 payBase, uint256 payQuote) = _payoutOverweightThenBalanced(
+            valueOutQ, price, scale, baseBal, quoteBal, imb
+        );
 
-    // Burn shares
-    d.shares = uint96(uint256(d.shares) - sh);
-    totalShares = tsBefore - sh;
-    uint256 us = userShares[user];
-    userShares[user] = us >= sh ? (us - sh) : 0;
+        // Burn shares
+        d.shares = uint96(uint256(d.shares) - sh);
+        totalShares = tsBefore - sh;
+        uint256 us = userShares[user];
+        userShares[user] = us >= sh ? (us - sh) : 0;
 
-    // If lot emptied, mark withdrawn and recycle
-    if (d.shares == 0) {
-        d.state = uint8(DepState.WITHDRAWN);
-        _removeUserDeposit(user, depositId);
-        _deleteDeposit(depositId);
-    }
+        // If lot emptied, mark withdrawn and recycle
+        if (d.shares == 0) {
+            d.state = uint8(DepState.WITHDRAWN);
+            _removeUserDeposit(user, depositId);
+            _deleteDeposit(depositId);
+        }
 
-    _transferOut(BASE,  payable(user), payBase);
-    _transferOut(QUOTE, payable(user), payQuote);
+        _transferOut(BASE,  payable(user), payBase);
+        _transferOut(QUOTE, payable(user), payQuote);
 
     emit WithdrawalFinalized(depositId, user, payBase, payQuote, sh);
 }
@@ -1010,6 +1046,8 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
     /// @notice Owner can redeem already‑accrued fee‑shares for BASE/QUOTE at any time.
     function ownerRedeemFees(
         uint256 feeSharesToBurn,
+        uint256 baseAmountMin,
+        uint256 quoteAmountMin,
         bytes memory supraArgs
     ) external onlyOwner nonReentrant {
         _accrueMgmtFee(); // ensure all vesting up to now is minted
@@ -1037,7 +1075,7 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
         ) = _inventoryValues(price, scale);
 
         // Value owed (QUOTE terms)
-        uint256 valueOutQ = (tvlQ * burn) / tsBefore;
+        uint256 valueOutQ = _sharesToValueQ(burn, tvlQ, tsBefore);
 
         // Compute payout per policy (handles both imbalanced and balanced)
         (uint256 payBase, uint256 payQuote) = _payoutOverweightThenBalanced(
@@ -1048,6 +1086,10 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
             quoteBal,
             imb
         );
+
+        // Add slippage protection checks
+        require(payBase >= baseAmountMin, "slippage: base");
+        require(payQuote >= quoteAmountMin, "slippage: quote");
 
         // Burn fee‑shares and shrink total supply
         ownerFeeShares = available - burn;
