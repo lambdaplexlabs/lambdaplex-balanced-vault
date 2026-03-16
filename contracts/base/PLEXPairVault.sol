@@ -177,7 +177,8 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
         uint256 indexed depositId,
         address indexed user,
         uint256 baseOut,
-        uint256 quoteOut
+        uint256 quoteOut,
+        uint256 sharesBurned
     );
 
     // Streaming airdrops
@@ -1028,8 +1029,8 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
         _transferOut(BASE,  payable(user), payBase);
         _transferOut(QUOTE, payable(user), payQuote);
 
-        emit WithdrawalFinalized(depositId, user, payBase, payQuote);
-    }
+    emit WithdrawalFinalized(depositId, user, payBase, payQuote, sh);
+}
 
     /// @notice Convenience: withdraw the entire lot.
     function withdrawAllFromDeposit(
@@ -1230,45 +1231,45 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
     ///         portions of BASE and QUOTE currently held by the vault (no oracle).
     ///         Ignores lockup and inventory policy. Available only when emergencyMode == true.
     function emergencyWithdrawFromDeposit(uint256 depositId) public nonReentrant {
-        require(emergencyMode, "emergency: disabled");
+    require(emergencyMode, "emergency: disabled");
 
-        Deposit storage d = deposits[depositId];
-        address user = d.user;                              // <-- capture before any delete
-        require(user == msg.sender, "not owner");
-        require(d.state == uint8(DepState.ACTIVE), "withdrawn");
-        uint256 sh = d.shares;
-        require(sh > 0, "no shares");
+    Deposit storage d = deposits[depositId];
+    address user = d.user;                              // <-- capture before any delete
+    require(user == msg.sender, "not owner");
+    require(d.state == uint8(DepState.ACTIVE), "withdrawn");
+    uint256 sh = d.shares;
+    require(sh > 0, "no shares");
 
-        // Keep accounting current (both are oracle-free)
-        _accrueMgmtFee();
-        _settleRewards(user);
+    // Keep accounting current (both are oracle-free)
+    _accrueMgmtFee();
+    _settleRewards(user);
 
-        uint256 tsBefore = totalShares;
-        require(tsBefore >= sh, "supply");
+    uint256 tsBefore = totalShares;
+    require(tsBefore >= sh, "supply");
 
-        // Snapshot balances and compute per-token pro-rata
-        uint256 baseBal  = _vaultBalance(BASE);
-        uint256 quoteBal = _vaultBalance(QUOTE);
-        uint256 baseOut  = (baseBal  * sh) / tsBefore;
-        uint256 quoteOut = (quoteBal * sh) / tsBefore;
+    // Snapshot balances and compute per-token pro-rata
+    uint256 baseBal  = _vaultBalance(BASE);
+    uint256 quoteBal = _vaultBalance(QUOTE);
+    uint256 baseOut  = (baseBal  * sh) / tsBefore;
+    uint256 quoteOut = (quoteBal * sh) / tsBefore;
 
-        // Burn user's shares and update totals
-        d.shares = 0;
-        d.state  = uint8(DepState.WITHDRAWN);
-        totalShares = tsBefore - sh;
-        uint256 us = userShares[d.user];
-        userShares[d.user] = us >= sh ? (us - sh) : 0;
+    // Burn user's shares and update totals
+    d.shares = 0;
+    d.state  = uint8(DepState.WITHDRAWN);
+    totalShares = tsBefore - sh;
+    uint256 us = userShares[d.user];
+    userShares[d.user] = us >= sh ? (us - sh) : 0;
 
-        // Remove from user's list and delete the record permanently
-        _removeUserDeposit(d.user, depositId);
-        _deleteDeposit(depositId);
+    // Remove from user's list and delete the record permanently
+    _removeUserDeposit(d.user, depositId);
+    _deleteDeposit(depositId);
 
-        // Payout (HBAR / ERC20)
-        _transferOut(BASE,  payable(user), baseOut);       // <-- use local
-        _transferOut(QUOTE, payable(user), quoteOut);
+    // Payout (HBAR / ERC20)
+    _transferOut(BASE,  payable(user), baseOut);       // <-- use local
+    _transferOut(QUOTE, payable(user), quoteOut);
 
-        emit WithdrawalFinalized(depositId, user, baseOut, quoteOut);
-    }
+    emit WithdrawalFinalized(depositId, user, baseOut, quoteOut, sh);
+}
 
     /// @notice Emergency redemption of already‑accrued owner fee‑shares for per‑token pro‑rata.
     ///         Available only when emergencyMode == true.

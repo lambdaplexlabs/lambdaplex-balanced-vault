@@ -22,12 +22,23 @@ contract PLEXPairVaultHedera is PLEXPairVault {
         distributor_,
         ownerFeeBips_
   ) {
-      // associate tokens to this vault
-      address[] memory tokens = new address[](2);
-      tokens[0] = base_;
-      tokens[1] = quote_;
+      require(base_ != quote_, 'base = quote');
+      bool success; 
+      bytes memory result;
+      if (base_ != address(0) && quote_ != address(0)) {
+            address[] memory tokens = new address[](2);
+            tokens[0] = base_;
+            tokens[1] = quote_;
 
-      (bool success, bytes memory result) = systemContract.call(abi.encodeWithSignature("associateTokens(address,address[])", address(this), tokens));
+            (success, result) = systemContract.call(abi.encodeWithSignature("associateTokens(address,address[])", address(this), tokens));
+      }
+      else {
+            (success, result) = systemContract.call(abi.encodeWithSignature(
+                  "associateToken(address,address)", 
+                  address(this),
+                  base_ < quote_ ? quote_ : base_
+            ));
+      }
       require(success, "HTS Precompile: CALL_EXCEPTION");
       int32 responseCode = abi.decode(result, (int32));
       require(responseCode == 22, "HTS Precompile: CALL_ERROR");
