@@ -1313,6 +1313,134 @@ describe("Vault", () => {
       expect(dep0.shares).to.be.gt(0);
     });
   });
+  describe("deposits: slippage enforcement", () => {
+    const ONE = BigNumber.from(10).pow(8); // token decimals = 8
+    const PAIR_ID = 1;
+    const ORACLE_DECIMALS_EXP = 8; // Supra returns decimal exponent, vault does 10**exp
+
+    async function setOraclePriceNow(rawPrice: BigNumber) {
+      const latest = await ethers.provider.getBlock("latest");
+      const ts = latest!.timestamp;
+
+      await mockSupra.setPriceInfo(
+        PAIR_ID,
+        [PAIR_ID],               // pairs
+        [rawPrice],              // prices
+        [ts],                    // timestamp
+        [ORACLE_DECIMALS_EXP],   // decimal exponent, not 1e8
+        [0]                      // round
+      );
+    }
+
+    it("reverts with slippage: quote when inventory changes after preview", async () => {
+      const [, aliceSigner] = await ethers.getSigners();
+      const aliceAddr = await aliceSigner.getAddress();
+
+      // Alice wants to deposit 1000/1000 into an empty vault
+      const baseMax = ethers.utils.parseUnits("1000", 8);
+      const quoteMax = ethers.utils.parseUnits("1000", 8);
+
+      await token0.transfer(aliceAddr, baseMax);
+      await token1.transfer(aliceAddr, quoteMax);
+      await token0.connect(aliceSigner).approve(vault.address, baseMax);
+      await token1.connect(aliceSigner).approve(vault.address, quoteMax);
+
+      // Oracle at 1:1
+      const rawPrice1x = BigNumber.from(10).pow(ORACLE_DECIMALS_EXP); // 1e8
+      await setOraclePriceNow(rawPrice1x);
+
+      // Client previews on a balanced empty vault
+      const [basePreview, quotePreview, modePreview] =
+        await vault.callStatic.previewDepositRequiredLive(baseMax, quoteMax, supraArgs);
+
+      expect(modePreview).to.equal(2); // balanced path
+      expect(basePreview).to.equal(baseMax);
+      expect(quotePreview).to.equal(quoteMax);
+
+      // BEFORE Alice tx lands, someone donates QUOTE to the vault,
+      // making BASE underweight and changing the acceptance policy.
+      const quoteDonation = ethers.utils.parseUnits("5000", 8); // > baseMax, so quote side should become 0
+      await token1.transfer(vault.address, quoteDonation);
+
+      // If Alice insists on the old preview mins (1000/1000), the tx should now revert
+      // because current policy will no longer accept enough QUOTE.
+      await expect(
+        vault.connect(aliceSigner).depositWithPolicy(
+          baseMax,
+          quoteMax,
+          basePreview,   // minBaseAccept
+          quotePreview,  // minQuoteAccept
+          supraArgs
+        )
+      ).to.be.revertedWith("slippage: quote");
+
+      // Sanity: if she relaxes quote min to 0, the tx should succeed
+      await expect(
+        vault.connect(aliceSigner).depositWithPolicy(
+          baseMax,
+          quoteMax,
+          basePreview, // base must still be accepted
+          0,           // quote can drift down to 0
+          supraArgs
+        )
+      ).to.not.be.reverted;
+    });
+
+    it("reverts with slippage: base when oracle price changes after preview", async () => {
+      const [, aliceSigner] = await ethers.getSigners();
+      const aliceAddr = await aliceSigner.getAddress();
+
+      // Fresh vault state assumed by beforeEach
+      const baseMax = ethers.utils.parseUnits("1000", 8);
+      const quoteMax = ethers.utils.parseUnits("1000", 8);
+
+      await token0.transfer(aliceAddr, baseMax);
+      await token1.transfer(aliceAddr, quoteMax);
+      await token0.connect(aliceSigner).approve(vault.address, baseMax);
+      await token1.connect(aliceSigner).approve(vault.address, quoteMax);
+
+      // 1:1 oracle for preview
+      const rawPrice1x = BigNumber.from(10).pow(ORACLE_DECIMALS_EXP); // 1e8
+      await setOraclePriceNow(rawPrice1x);
+
+      const [basePreview, quotePreview, modePreview] =
+        await vault.callStatic.previewDepositRequiredLive(baseMax, quoteMax, supraArgs);
+
+      expect(modePreview).to.equal(2); // balanced path
+      expect(basePreview).to.equal(baseMax);
+      expect(quotePreview).to.equal(quoteMax);
+
+      // BEFORE tx lands, oracle price doubles:
+      // 1 BASE = 2 QUOTE.
+      // On a balanced empty vault with caps 1000/1000, the accepted base side drops to 500.
+      const rawPrice2x = BigNumber.from(2).mul(BigNumber.from(10).pow(ORACLE_DECIMALS_EXP)); // 2e8
+      await setOraclePriceNow(rawPrice2x);
+
+      // Old preview wanted 1000 BASE accepted, but new price only permits 500 BASE accepted.
+      await expect(
+        vault.connect(aliceSigner).depositWithPolicy(
+          baseMax,
+          quoteMax,
+          basePreview,   // minBaseAccept = 1000
+          quotePreview,  // minQuoteAccept = 1000
+          supraArgs
+        )
+      ).to.be.revertedWith("slippage: base");
+
+      // Sanity: if Alice relaxes base min to 500, deposit should succeed.
+      const baseMinRelaxed = ethers.utils.parseUnits("500", 8);
+
+      await expect(
+        vault.connect(aliceSigner).depositWithPolicy(
+          baseMax,
+          quoteMax,
+          baseMinRelaxed,
+          quotePreview,
+          supraArgs
+        )
+      ).to.not.be.reverted;
+    });
+  });
   // ─────────────────────────────────────────────────────────────
   // Withdrawals
   // ─────────────────────────────────────────────────────────────
@@ -3846,7 +3974,7 @@ describe("Vault", () => {
       expect(bobA).to.be.gte(aliceA);
     });
   });
-  describe.only("virtual shares mitigation (donation / inflation attack)", () => {
+  describe("virtual shares mitigation (donation / inflation attack)", () => {
     const PAIR_ID = 1;
     const ONE = BigNumber.from(10).pow(8);
     const DECIMAL = 8
