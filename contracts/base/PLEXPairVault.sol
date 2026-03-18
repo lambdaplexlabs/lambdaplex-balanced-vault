@@ -112,11 +112,9 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
     }
 
     struct Deposit {
-        // slot 0
         address user;
-        uint96 shares; // <= 2^96-1
-        // slot 1
-        uint64 createdAt; // deposit time
+        uint96 shares;
+        uint64 createdAt;
         uint64 lockupUntil; // createdAt + lockupSecs
         uint8 state; // DepState
     }
@@ -145,7 +143,7 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
         uint256 accrued;
     }
 
-    address[] public rewardTokens; // keep small
+    address[] public rewardTokens; // max length = MAX_REWARD_TOKENS 
     mapping(address => RewardData) public rewards; // rewardToken => RewardData
     mapping(address => mapping(address => UserReward)) public userRewards; // user => rewardToken => UserReward
 
@@ -180,7 +178,6 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
     );
 
     /* ── Events ── */
-    // Explicit both sides for policy deposits
     event DepositedPolicy(
         address indexed user,
         uint256 indexed depositId,
@@ -529,7 +526,6 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
             uint256 phase1BaseUnits = (phase1ValueQ * priceScale) /
                 priceQPerBase; // floor to BASE units
 
-            // By construction this should hold; keep as a defensive check
             require(phase1BaseUnits <= baseBalance, "BASE liquidity too low");
 
             baseBalance -= phase1BaseUnits;
@@ -544,14 +540,11 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
                 ? owedValueQ
                 : overweightValueQ;
 
-            // Defensive check (should hold by construction)
             require(phase1ValueQ <= quoteBalance, "QUOTE liquidity too low");
 
             quoteBalance -= phase1ValueQ;
             owedValueQ -= phase1ValueQ;
             quotePay = phase1ValueQ;
-
-            // If already balanced (imbalanceValueQ == 0), skip phase 1 entirely
         }
 
         // -------- Phase 2: split the remaining owed value 50/50 by value --------
@@ -600,7 +593,7 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
         quotePay += phase2QuoteUnits;
     }
 
-    /* ───────────────────────── Streaming Rewards (ERC-20 only) ───────────────────────── */
+    /* ───────────────────────── Streaming Rewards ───────────────────────── */
 
     function _ensureListedReward(address rt) internal {
         for (uint i = 0; i < rewardTokens.length; i++)
@@ -725,7 +718,7 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
         }
     }
 
-    /// @notice Claim a specific reward token (ERC‑20). Paid from Distributor to caller.
+    /// @notice Claim a specific reward token. Paid from Distributor to caller.
     function claimRewards(address rewardToken) external nonReentrant {
         require(address(distributor) != address(0), "distributor not set");
         _settleRewards(msg.sender);
@@ -926,7 +919,6 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
             int256 imb
         ) = _inventoryValuesFromBalances(baseBal, quoteBal, price, scale);
 
-        // Treat TVL=0 as "balanced" (50/50 required).
         bool balanced = _isBalanced(tvlQ, imb);
 
         if (balanced) {
@@ -1018,7 +1010,7 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
     ///         - If balanced: accept only a 50/50-by-value split.
     /// Pass `baseMax`/`quoteMax` as user's caps and `minBaseAccept`/`minQuoteAccept` as slippage bounds.
     /// For native HBAR, `msg.value` is treated as a max funding amount; any excess is refunded to `msg.sender`.
-    /// FOT (fee-on-transfer) tokens are forbidden: ERC-20 pulls must be exact-in.
+    /// FOT (fee-on-transfer) tokens are forbidden: pulls must be exact-in.
     function depositWithPolicy(
         uint256 baseMax,
         uint256 quoteMax,
@@ -1066,7 +1058,7 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
 
         // Pre-balances for TVL-before.
 
-        // Pull ERC-20 funds (FOT forbidden: must receive exactly requested)
+        // Pull funds (FOT forbidden: must receive exactly requested)
         if (baseAcc > 0 && BASE != address(0)) {
             uint256 pre = IERC20(BASE).balanceOf(address(this));
             IERC20(BASE).safeTransferFrom(msg.sender, address(this), baseAcc);
@@ -1253,7 +1245,6 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
 
     /* ───────────────────────── Native receive ───────────────────────── */
 
-    /// @dev Accepts stray HBAR (e.g., trading PnL). Does not mint shares automatically.
     receive() external payable {}
 
     /* ───────────────────────── Internal: fee accrual ───────────────────────── */
@@ -1390,7 +1381,7 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
         require(emergencyMode, "emergency: disabled");
 
         Deposit storage d = deposits[depositId];
-        address user = d.user;                              // <-- capture before any delete
+        address user = d.user;
         require(user == msg.sender, "not owner");
         require(d.state == uint8(DepState.ACTIVE), "withdrawn");
         uint256 sh = d.shares;
@@ -1420,8 +1411,8 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
         _removeUserDeposit(d.user, depositId);
         _deleteDeposit(depositId);
 
-        // Payout (HBAR / ERC20)
-        _transferOut(BASE,  payable(user), baseOut);       // <-- use local
+        // Payout (HBAR / Token)
+        _transferOut(BASE,  payable(user), baseOut);
         _transferOut(QUOTE, payable(user), quoteOut);
 
         emit WithdrawalFinalized(depositId, user, baseOut, quoteOut, sh);
@@ -1438,7 +1429,7 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
             "bad feeShares"
         );
 
-        _accrueMgmtFee(); // oracle-free
+        _accrueMgmtFee();
 
         uint256 tsBefore = totalShares;
         require(tsBefore >= feeSharesToBurn, "supply");
