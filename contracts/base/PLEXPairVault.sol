@@ -230,6 +230,9 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
         require(base_ != quote_, "pair identical");
         require(vestingSecs_ > 0, "vesting=0");
         require(initialBalanceTolBips_ <= 50_000, "tol too high");
+        require(lockupSecs_ > 0, "lockup=0");
+        require(feeChangeDelaySecs_ >= 1 days, "delay too short");
+
         BASE = base_;
         QUOTE = quote_;
         ORACLE_BASE = oracleBase_;
