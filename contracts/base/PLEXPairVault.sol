@@ -700,10 +700,14 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
         _settleRewards(msg.sender);
         UserReward storage U = userRewards[msg.sender][rewardToken];
         uint256 amt = U.accrued;
-        U.accrued = 0;
         if (amt > 0) {
-            distributor.claimTo(rewardToken, msg.sender, amt);
-            emit RewardClaimed(rewardToken, msg.sender, amt);
+            try distributor.claimTo(rewardToken, msg.sender, amt) {
+                U.accrued = 0;
+                emit RewardClaimed(rewardToken, msg.sender, amt);
+            } catch {
+                emit RewardClaimFailed(rewardToken, msg.sender, amt);
+            // Leave U.accrued intact for retry via claimRewards(rt)
+            }
         }
     }
 
