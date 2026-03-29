@@ -4,6 +4,7 @@ pragma solidity ^0.8.24;
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import "../libraries/PRBMathCommon.sol";
+import "../libraries/SafeERC20.sol";
 import "../interfaces/IAirdropDistributor.sol";
 import "../interfaces/IERC20.sol";
 import "../interfaces/ISupraRegistry.sol";
@@ -17,34 +18,6 @@ abstract contract ReentrancyGuard {
         _entered = 1;
         _;
         _entered = 0;
-    }
-}
-
-library SafeERC20 {
-    function safeTransfer(IERC20 t, address to, uint256 v) internal {
-        (bool success, bytes memory ret) =
-            address(t).call(
-                abi.encodeWithSelector(IERC20.transfer.selector, to, v)
-            );
-        require(success, "TRANSFER_CALL_FAILED");
-        if (ret.length > 0) {
-            require(abi.decode(ret, (bool)), "TRANSFER_FAILED");
-        }
-    }
-    function safeTransferFrom(
-        IERC20 t,
-        address from,
-        address to,
-        uint256 v
-    ) internal {
-        (bool success, bytes memory ret) =
-            address(t).call(
-                abi.encodeWithSelector(IERC20.transferFrom.selector, from, to, v)
-            );
-        require(success, "TRANSFER_FROM_CALL_FAILED");
-        if (ret.length > 0) {
-            require(abi.decode(ret, (bool)), "TRANSFER_FROM_FAILED");
-        }
     }
 }
 

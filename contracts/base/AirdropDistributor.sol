@@ -3,6 +3,7 @@ pragma solidity ^0.8.24;
 
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "../interfaces/IERC20.sol";
+import "../libraries/SafeERC20.sol";
 
 /* Minimal guards (same pattern as in your vault) */
 abstract contract ReentrancyGuard {
@@ -17,15 +18,6 @@ abstract contract ReentrancyGuard {
 interface IRewardNotifiableVault {
     /// @dev Distributor calls this after crediting the vault. MUST NOT call distributor in here.
     function onAirdropFunded(address token, uint256 netAmount) external;
-}
-
-library SafeERC20 {
-    function safeTransfer(IERC20 t, address to, uint256 v) internal {
-        bool ok = t.transfer(to, v); require(ok, "TRANSFER_FAILED");
-    }
-    function safeTransferFrom(IERC20 t, address from, address to, uint256 v) internal {
-        bool ok = t.transferFrom(from, to, v); require(ok, "TRANSFER_FROM_FAILED");
-    }
 }
 
 contract AirdropDistributor is Ownable, ReentrancyGuard {
