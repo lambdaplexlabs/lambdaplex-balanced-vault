@@ -331,7 +331,6 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
         uint64 t = uint64(info.timestamp[0]);
         uint64 nowU = uint64(block.timestamp);
         require(t != 0, "oracle: ts=0");
-        require(t <= nowU, "oracle: future");
         require(nowU - t <= STALE_PRICE, "oracle: stale");
 
         // --- Pair identity checks ---
