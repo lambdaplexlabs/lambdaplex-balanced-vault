@@ -4,6 +4,7 @@ pragma solidity ^0.8.24;
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import "../libraries/PRBMathCommon.sol";
+import "../libraries/SafeERC20.sol";
 import "../interfaces/IAirdropDistributor.sol";
 import "../interfaces/IERC20.sol";
 import "../interfaces/ISupraRegistry.sol";
@@ -17,34 +18,6 @@ abstract contract ReentrancyGuard {
         _entered = 1;
         _;
         _entered = 0;
-    }
-}
-
-library SafeERC20 {
-    function safeTransfer(IERC20 t, address to, uint256 v) internal {
-        (bool success, bytes memory ret) =
-            address(t).call(
-                abi.encodeWithSelector(IERC20.transfer.selector, to, v)
-            );
-        require(success, "TRANSFER_CALL_FAILED");
-        if (ret.length > 0) {
-            require(abi.decode(ret, (bool)), "TRANSFER_FAILED");
-        }
-    }
-    function safeTransferFrom(
-        IERC20 t,
-        address from,
-        address to,
-        uint256 v
-    ) internal {
-        (bool success, bytes memory ret) =
-            address(t).call(
-                abi.encodeWithSelector(IERC20.transferFrom.selector, from, to, v)
-            );
-        require(success, "TRANSFER_FROM_CALL_FAILED");
-        if (ret.length > 0) {
-            require(abi.decode(ret, (bool)), "TRANSFER_FROM_FAILED");
-        }
     }
 }
 
@@ -228,8 +201,11 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
         uint32 initialBalanceTolBips_
     ) {
         require(base_ != quote_, "pair identical");
-        require(vestingSecs_ > 0, "vesting=0");
+        require(vestingSecs_ > 0 && vestingSecs_ <= 7 days, "vesting bounds");
         require(initialBalanceTolBips_ <= 50_000, "tol too high");
+        require(lockupSecs_ > 0 && lockupSecs <= 7 days, "lockup bounds");
+        require(feeChangeDelaySecs_ >= 1 days && feeChangeDelaySecs_ <= 30 days, "delay too short");
+
         BASE = base_;
         QUOTE = quote_;
         ORACLE_BASE = oracleBase_;
@@ -355,7 +331,6 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
         uint64 t = uint64(info.timestamp[0]);
         uint64 nowU = uint64(block.timestamp);
         require(t != 0, "oracle: ts=0");
-        require(t <= nowU, "oracle: future");
         require(nowU - t <= STALE_PRICE, "oracle: stale");
 
         // --- Pair identity checks ---
@@ -724,10 +699,14 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
         _settleRewards(msg.sender);
         UserReward storage U = userRewards[msg.sender][rewardToken];
         uint256 amt = U.accrued;
-        U.accrued = 0;
         if (amt > 0) {
-            distributor.claimTo(rewardToken, msg.sender, amt);
-            emit RewardClaimed(rewardToken, msg.sender, amt);
+            try distributor.claimTo(rewardToken, msg.sender, amt) {
+                U.accrued = 0;
+                emit RewardClaimed(rewardToken, msg.sender, amt);
+            } catch {
+                emit RewardClaimFailed(rewardToken, msg.sender, amt);
+            // Leave U.accrued intact for retry via claimRewards(rt)
+            }
         }
     }
 
@@ -1191,9 +1170,11 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
         uint256 quoteAmountMin,
         bytes memory supraArgs
     ) external onlyOwner nonReentrant {
+        uint256 available = ownerFeeShares;
+        require(feeSharesToBurn <= available, "exceeds available");
         _accrueMgmtFee(); // ensure all vesting up to now is minted
 
-        uint256 available = ownerFeeShares;
+        
         uint256 burn = feeSharesToBurn > available
             ? available
             : feeSharesToBurn;
