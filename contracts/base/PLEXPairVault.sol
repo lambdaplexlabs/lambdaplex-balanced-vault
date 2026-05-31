@@ -228,7 +228,7 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
         }
         if (manager_ != address(0)) {
             manager = manager_;
-            emit ManagerSet(distributor_);
+            emit ManagerSet(manager_);
         }
         lastFeeAccrual = uint64(block.timestamp);
         require(ownerFeeBips_ <= MAX_OWNER_FEE_BIPS, "rate>0.3%");
