@@ -49,6 +49,10 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
     IAirdropDistributor public distributor;
     event DistributorSet(address indexed distributor);
 
+    // Manager whose key authorizes Lambdaplex Settlements for this contract
+    address public manager;
+    event ManagerSet(address indexed manager);
+
     // Fixed vesting for airdrops (enforced in distributor; vault uses the same environment value)
     uint64 public immutable vestingSecs;
 
@@ -196,6 +200,7 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
         address oracleBase_,
         address oracleQuote_,
         address distributor_,
+        address manager_,
         uint32 ownerFeeBips_,
         uint64 vestingSecs_,
         uint64 lockupSecs_,
@@ -221,12 +226,22 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
             distributor = IAirdropDistributor(distributor_);
             emit DistributorSet(distributor_);
         }
+        if (manager_ != address(0)) {
+            manager = manager_;
+            emit ManagerSet(distributor_);
+        }
         lastFeeAccrual = uint64(block.timestamp);
         require(ownerFeeBips_ <= MAX_OWNER_FEE_BIPS, "rate>0.3%");
         ownerFeeBips = ownerFeeBips_;
     }
 
     /* ───────────────────────── Admin ───────────────────────── */
+
+    function setManager(address manager_) external onlyOwner {
+        require(manager != address(0), "setManager: address(0)"); // cap at 5%
+        manager = manager_;
+        emit ManagerSet(manager_);
+    }
 
     function setBalanceToleranceBips(uint32 bips) external onlyOwner {
         require(bips <= 50_000, "tol too high"); // cap at 5%
