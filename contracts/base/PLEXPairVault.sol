@@ -5,6 +5,7 @@ import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import "../libraries/PRBMathCommon.sol";
 import "../libraries/SafeERC20.sol";
+import "../libraries/SupraTimestamp.sol";
 import "../interfaces/IAirdropDistributor.sol";
 import "../interfaces/IERC20.sol";
 import "../interfaces/ISupraRegistry.sol";
@@ -42,6 +43,7 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
     address public immutable ORACLE_BASE;
     address public immutable ORACLE_QUOTE;
     uint256 constant STALE_PRICE = 30;
+    uint256 constant MAX_FUTURE_SKEW_SECS = 5;
 
     // Distributor that custodies reward tokens and pays on claim
     IAirdropDistributor public distributor;
@@ -328,10 +330,11 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
         require(info.pairs.length == 1, "oracle: pairs!=1");
 
         // --- Freshness checks ---
-        uint64 t = uint64(info.timestamp[0]);
-        uint64 nowU = uint64(block.timestamp);
+        uint256 t = SupraTimestamp.normalizeSeconds(info.timestamp[0]);
+        uint256 nowU = block.timestamp;
         require(t != 0, "oracle: ts=0");
-        require(nowU - t <= STALE_PRICE, "oracle: stale");
+        require(t <= nowU + MAX_FUTURE_SKEW_SECS, "oracle: future");
+        require(t + STALE_PRICE >= nowU, "oracle: stale");
 
         // --- Pair identity checks ---
         ISupraRegistry.TokenPair memory tokenPair;

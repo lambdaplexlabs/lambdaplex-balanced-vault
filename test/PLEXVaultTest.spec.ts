@@ -113,7 +113,7 @@ describe("Vault", () => {
     const dec = BigNumber.from(8)
     const scale = BigNumber.from(10).pow(8); // 1e8
     const latestBlock = await ethers.provider.getBlock("latest");
-    const ts = latestBlock!.timestamp;
+    const ts = latestBlock!.timestamp*1000;
 
     await mockSupra.setPriceInfo(
       1,
@@ -304,7 +304,7 @@ describe("Vault", () => {
     // helper: refresh oracle with 1:1 price at the current block timestamp
     async function refreshOracleToNowAtOneToOne() {
       const latestBlock = await ethers.provider.getBlock("latest");
-      const ts = latestBlock!.timestamp;
+      const ts = latestBlock!.timestamp*1000;
       await mockSupra.setPriceInfo(
         PAIR_ID,
         [PAIR_ID],        // pairs
@@ -968,7 +968,7 @@ describe("Vault", () => {
     // Helper to refresh the mock Supra price so withdrawals don't hit "oracle: stale"
     async function refreshOracle() {
       const latestBlock = await ethers.provider.getBlock("latest");
-      const ts = latestBlock!.timestamp;
+      const ts = latestBlock!.timestamp*1000;
       const price = BigNumber.from(10).pow(8);  // 1.0 * 1e8
       const dec = BigNumber.from(8)
       const scale = BigNumber.from(10).pow(dec);  // 1e8
@@ -1247,7 +1247,7 @@ describe("Vault", () => {
       const rawPrice = BigNumber.from(10).pow(ORACLE_DECIMALS_EXP); // 1.0 * 1e8
 
       async function refreshOracleNow() {
-        const ts = (await ethers.provider.getBlock("latest"))!.timestamp;
+        const ts = (await ethers.provider.getBlock("latest"))!.timestamp*1000;
         await mockSupra.setPriceInfo(
           PAIR_ID,
           [PAIR_ID],
@@ -1320,7 +1320,7 @@ describe("Vault", () => {
 
     async function setOraclePriceNow(rawPrice: BigNumber) {
       const latest = await ethers.provider.getBlock("latest");
-      const ts = latest!.timestamp;
+      const ts = latest!.timestamp*1000;
 
       await mockSupra.setPriceInfo(
         PAIR_ID,
@@ -1449,7 +1449,7 @@ describe("Vault", () => {
 
     async function refreshOracleToNowAtOneToOne() {
       const latestBlock = await ethers.provider.getBlock("latest");
-      const ts = latestBlock!.timestamp;
+      const ts = latestBlock!.timestamp*1000;
       await mockSupra.setPriceInfo(
         PAIR_ID,
         [PAIR_ID],        // pairs
@@ -1560,7 +1560,7 @@ describe("Vault", () => {
 
           // Refresh oracle so proof is not stale (1:1 price, same scale as in beforeEach)
           const latestBlock = await ethers.provider.getBlock("latest");
-          const nowTs = latestBlock!.timestamp;
+          const nowTs = latestBlock!.timestamp*1000;
           const dec = BigNumber.from(8)
           const price = BigNumber.from(10).pow(dec); // 1.0 * 1e8
           const scale = BigNumber.from(10).pow(dec); // 1e8
@@ -2209,7 +2209,7 @@ describe("Vault", () => {
   describe("airdrop rewards", () => {
     async function refreshOraclePrice1to1() {
       const latestBlock = await ethers.provider.getBlock("latest");
-      const ts = latestBlock!.timestamp;
+      const ts = latestBlock!.timestamp*1000;
 
       // Must match how you set it in beforeEach: price = scale for 1:1
       const dec = BigNumber.from(8)
@@ -3500,7 +3500,7 @@ describe("Vault", () => {
       const DEC = BigNumber.from(8)
       const ONE = BigNumber.from(10).pow(DEC); // 1e8
       const latest = await ethers.provider.getBlock("latest");
-      const ts = latest!.timestamp;
+      const ts = latest!.timestamp*1000;
 
       await mockSupra.setPriceInfo(
         1,
@@ -3767,7 +3767,7 @@ describe("Vault", () => {
       const DEC = BigNumber.from(8)
       const ONE = BigNumber.from(10).pow(DEC); // 1e8
       const latest = await ethers.provider.getBlock("latest");
-      const ts = latest!.timestamp;
+      const ts = latest!.timestamp*1000;
 
       await mockSupra.setPriceInfo(
         1,
@@ -3985,7 +3985,7 @@ describe("Vault", () => {
 
     async function refreshOracle1to1() {
       const latest = await ethers.provider.getBlock("latest");
-      const ts = latest!.timestamp;
+      const ts = latest!.timestamp*1000;
 
       // rawPrice = 1e8, scale = 1e8 => 1.0
       await mockSupra.setPriceInfo(
