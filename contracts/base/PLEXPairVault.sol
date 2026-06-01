@@ -238,7 +238,7 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
     /* ───────────────────────── Admin ───────────────────────── */
 
     function setManager(address manager_) external onlyOwner {
-        require(manager != address(0), "setManager: address(0)"); // cap at 5%
+        require(manager_ != address(0), "setManager: address(0)"); // cap at 5%
         manager = manager_;
         emit ManagerSet(manager_);
     }
