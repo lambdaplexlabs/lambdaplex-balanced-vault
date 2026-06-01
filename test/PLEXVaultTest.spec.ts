@@ -71,6 +71,7 @@ describe("Vault", () => {
       token0.address,
       token1.address,
       distributor.address,
+      deployer.getAddress(),
       initOwnerBips,
       WEEK_SECS,
       DAY_SECS,
@@ -516,6 +517,7 @@ describe("Vault", () => {
         token0.address,
         token1.address,
         distributor2.address,
+        deployer.getAddress(),
         initOwnerBips,
         WEEK_SECS,
         DAY_SECS,
@@ -1231,6 +1233,7 @@ describe("Vault", () => {
         ethers.constants.AddressZero, // ORACLE_BASE = HBAR
         token1.address,               // ORACLE_QUOTE = token1
         distributor.address,
+        deployer.getAddress(),
         initOwnerBips,
         WEEK_SECS,
         DAY_SECS,
@@ -3321,6 +3324,7 @@ describe("Vault", () => {
           token0.address,
           token1.address,
           distributor.address,
+          deployer.getAddress(),
           feeBips,
           WEEK_SECS,
           DAY_SECS,
