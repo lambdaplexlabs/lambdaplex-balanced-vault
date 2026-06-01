@@ -1189,10 +1189,8 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
         bytes memory supraArgs
     ) external onlyOwner nonReentrant {
         uint256 available = ownerFeeShares;
-        require(feeSharesToBurn <= available, "exceeds available");
         _accrueMgmtFee(); // ensure all vesting up to now is minted
 
-        
         uint256 burn = feeSharesToBurn > available
             ? available
             : feeSharesToBurn;
