@@ -1280,7 +1280,7 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
         if (nowTs <= _lastFeeAccrual) return;
 
         // If no depositor shares, don't build "backlog": just move the clock and possibly apply pending.
-        if (totalShares == 0) {
+        if (_eligibleShares() == 0) {
             lastFeeAccrual = nowTs;
             _applyPendingFeeIfDue(nowTs);
             return;
@@ -1327,7 +1327,9 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
 
             // Skip if no depositor shares
             uint256 S = totalShares;
-            if (S != 0) {
+            uint256 depositorShares = _eligibleShares();
+
+            if (depositorShares != 0 && S != 0) {
                 uint256 num = uint256(rateBips) * uint256(dt);
                 // ΔS = S * num / (den - num)
                 uint256 dS = (S * num) / (den - num);
