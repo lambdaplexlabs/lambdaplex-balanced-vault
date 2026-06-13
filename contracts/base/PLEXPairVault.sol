@@ -5,6 +5,7 @@ import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import "../libraries/PRBMathCommon.sol";
 import "../libraries/SafeERC20.sol";
+import "../libraries/SupraTimestamp.sol";
 import "../interfaces/IAirdropDistributor.sol";
 import "../interfaces/IERC20.sol";
 import "../interfaces/ISupraRegistry.sol";
@@ -42,10 +43,15 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
     address public immutable ORACLE_BASE;
     address public immutable ORACLE_QUOTE;
     uint256 constant STALE_PRICE = 30;
+    uint256 constant MAX_FUTURE_SKEW_SECS = 5;
 
     // Distributor that custodies reward tokens and pays on claim
     IAirdropDistributor public distributor;
     event DistributorSet(address indexed distributor);
+
+    // Manager whose key authorizes Lambdaplex Settlements for this contract
+    address public manager;
+    event ManagerSet(address indexed manager);
 
     // Fixed vesting for airdrops (enforced in distributor; vault uses the same environment value)
     uint64 public immutable vestingSecs;
@@ -194,6 +200,7 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
         address oracleBase_,
         address oracleQuote_,
         address distributor_,
+        address manager_,
         uint32 ownerFeeBips_,
         uint64 vestingSecs_,
         uint64 lockupSecs_,
@@ -219,12 +226,22 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
             distributor = IAirdropDistributor(distributor_);
             emit DistributorSet(distributor_);
         }
+        if (manager_ != address(0)) {
+            manager = manager_;
+            emit ManagerSet(manager_);
+        }
         lastFeeAccrual = uint64(block.timestamp);
         require(ownerFeeBips_ <= MAX_OWNER_FEE_BIPS, "rate>0.3%");
         ownerFeeBips = ownerFeeBips_;
     }
 
     /* ───────────────────────── Admin ───────────────────────── */
+
+    function setManager(address manager_) external onlyOwner {
+        require(manager_ != address(0), "setManager: address(0)"); // cap at 5%
+        manager = manager_;
+        emit ManagerSet(manager_);
+    }
 
     function setBalanceToleranceBips(uint32 bips) external onlyOwner {
         require(bips <= 50_000, "tol too high"); // cap at 5%
@@ -328,10 +345,11 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
         require(info.pairs.length == 1, "oracle: pairs!=1");
 
         // --- Freshness checks ---
-        uint64 t = uint64(info.timestamp[0]);
-        uint64 nowU = uint64(block.timestamp);
+        uint256 t = SupraTimestamp.normalizeSeconds(info.timestamp[0]);
+        uint256 nowU = block.timestamp;
         require(t != 0, "oracle: ts=0");
-        require(nowU - t <= STALE_PRICE, "oracle: stale");
+        require(t <= nowU + MAX_FUTURE_SKEW_SECS, "oracle: future");
+        require(t + STALE_PRICE >= nowU, "oracle: stale");
 
         // --- Pair identity checks ---
         ISupraRegistry.TokenPair memory tokenPair;
@@ -1170,11 +1188,8 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
         uint256 quoteAmountMin,
         bytes memory supraArgs
     ) external onlyOwner nonReentrant {
-        uint256 available = ownerFeeShares;
-        require(feeSharesToBurn <= available, "exceeds available");
         _accrueMgmtFee(); // ensure all vesting up to now is minted
-
-        
+        uint256 available = ownerFeeShares;
         uint256 burn = feeSharesToBurn > available
             ? available
             : feeSharesToBurn;
@@ -1265,7 +1280,7 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
         if (nowTs <= _lastFeeAccrual) return;
 
         // If no depositor shares, don't build "backlog": just move the clock and possibly apply pending.
-        if (totalShares == 0) {
+        if (_eligibleShares() == 0) {
             lastFeeAccrual = nowTs;
             _applyPendingFeeIfDue(nowTs);
             return;
@@ -1312,7 +1327,9 @@ contract PLEXPairVault is Ownable, ReentrancyGuard {
 
             // Skip if no depositor shares
             uint256 S = totalShares;
-            if (S != 0) {
+            uint256 depositorShares = _eligibleShares();
+
+            if (depositorShares != 0 && S != 0) {
                 uint256 num = uint256(rateBips) * uint256(dt);
                 // ΔS = S * num / (den - num)
                 uint256 dS = (S * num) / (den - num);

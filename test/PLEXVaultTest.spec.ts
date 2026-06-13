@@ -71,6 +71,7 @@ describe("Vault", () => {
       token0.address,
       token1.address,
       distributor.address,
+      deployer.getAddress(),
       initOwnerBips,
       WEEK_SECS,
       DAY_SECS,
@@ -113,7 +114,7 @@ describe("Vault", () => {
     const dec = BigNumber.from(8)
     const scale = BigNumber.from(10).pow(8); // 1e8
     const latestBlock = await ethers.provider.getBlock("latest");
-    const ts = latestBlock!.timestamp;
+    const ts = latestBlock!.timestamp*1000;
 
     await mockSupra.setPriceInfo(
       1,
@@ -304,7 +305,7 @@ describe("Vault", () => {
     // helper: refresh oracle with 1:1 price at the current block timestamp
     async function refreshOracleToNowAtOneToOne() {
       const latestBlock = await ethers.provider.getBlock("latest");
-      const ts = latestBlock!.timestamp;
+      const ts = latestBlock!.timestamp*1000;
       await mockSupra.setPriceInfo(
         PAIR_ID,
         [PAIR_ID],        // pairs
@@ -474,6 +475,95 @@ describe("Vault", () => {
       // still might be positive, but must be smaller
       expect(imbalanceAfter.lt(imbalanceBefore)).to.equal(true);
     });
+    it("does not accrue additional owner fee shares when only ownerFeeShares remain", async () => {
+      const [deployerSigner, aliceSigner] = await ethers.getSigners();
+      const deployerAddr = await deployerSigner.getAddress();
+      const aliceAddr = await aliceSigner.getAddress();
+      // Deploy a fresh vault with a non-zero initial owner fee.
+      // Adjust constructor args if your local constructor signature differs.
+      const feeBips = 1_000; // 0.1% / week
+      const Vault = await ethers.getContractFactory("PLEXPairVault");
+      const feeVault = await Vault.deploy(
+        token0.address,
+        token1.address,
+        token0.address,
+        token1.address,
+        distributor.address,
+        deployerAddr,     // manager
+        feeBips,          // ownerFeeBips_
+        WEEK_SECS,        // vestingSecs_
+        DAY_SECS,         // lockupSecs_
+        WEEK_SECS,        // feeChangeDelaySecs_
+        1_000             // initialBalanceTolBips_
+      );
+      await feeVault.deployed();
+      // Alice deposits balanced liquidity.
+      const depositAmount = ONE.mul(1_000); // 1000 token0 + 1000 token1
+      await token0.transfer(aliceAddr, depositAmount);
+      await token1.transfer(aliceAddr, depositAmount);
+      await token0.connect(aliceSigner).approve(feeVault.address, depositAmount);
+      await token1.connect(aliceSigner).approve(feeVault.address, depositAmount);
+      await refreshOracleToNowAtOneToOne();
+      await feeVault
+        .connect(aliceSigner)
+        .depositWithPolicy(
+          depositAmount,
+          depositAmount,
+          0, // minBaseAccept
+          0, // minQuoteAccept
+          supraArgs
+        );
+
+      const aliceDeposits = await feeVault.depositsOf(aliceAddr);
+      expect(aliceDeposits.length).to.equal(1);
+      const depId = aliceDeposits[0];
+      expect(await feeVault.ownerFeeShares()).to.equal(0);
+      expect(await feeVault.userShares(aliceAddr)).to.be.gt(0);
+      // Let time pass so a management fee can accrue.
+      await network.provider.send("evm_increaseTime", [WEEK_SECS]);
+      await network.provider.send("evm_mine");
+      // Alice withdraws everything.
+      // withdrawAllFromDeposit() begins by calling _accrueMgmtFee(),
+      // so this mints ownerFeeShares before Alice's shares are burned.
+      await refreshOracleToNowAtOneToOne();
+      await feeVault
+        .connect(aliceSigner)
+        .withdrawAllFromDeposit(depId, supraArgs);
+      // State B:
+      // - Alice has no depositor shares.
+      // - ownerFeeShares remain.
+      // - totalShares is now exactly ownerFeeShares.
+      const ownerFeeSharesStateB = await feeVault.ownerFeeShares();
+      const totalSharesStateB = await feeVault.totalShares();
+      expect(await feeVault.userShares(aliceAddr)).to.equal(0);
+      expect(ownerFeeSharesStateB).to.be.gt(0);
+      expect(totalSharesStateB).to.equal(ownerFeeSharesStateB);
+      const lastAccrualBefore = await feeVault.lastFeeAccrual();
+      // Let another week pass.
+      await network.provider.send("evm_increaseTime", [WEEK_SECS]);
+      await network.provider.send("evm_mine");
+      // Trigger _accrueMgmtFee() again.
+      //
+      // Correct behavior:
+      //   _eligibleShares() == 0, so it should only move lastFeeAccrual forward
+      //   and should NOT mint more ownerFeeShares.
+      //
+      const tx = await feeVault
+        .connect(deployerSigner)
+        .scheduleOwnerFeeBips(feeBips);
+      const rcpt = await tx.wait();
+      const block = await ethers.provider.getBlock(rcpt.blockNumber);
+      const triggerTs = block!.timestamp;
+      const ownerFeeSharesAfter = await feeVault.ownerFeeShares();
+      const totalSharesAfter = await feeVault.totalShares();
+      const lastAccrualAfter = await feeVault.lastFeeAccrual();
+      // Core invariant: no self-compounding fee accrual when no depositor shares remain.
+      expect(ownerFeeSharesAfter).to.equal(ownerFeeSharesStateB);
+      expect(totalSharesAfter).to.equal(totalSharesStateB);
+      // But the fee clock should still move forward so no backlog builds.
+      expect(lastAccrualAfter).to.be.gt(lastAccrualBefore);
+      expect(lastAccrualAfter).to.equal(triggerTs);
+    });
   });
   // ─────────────────────────────────────────────────────────────
   // Emergency mode
@@ -516,6 +606,7 @@ describe("Vault", () => {
         token0.address,
         token1.address,
         distributor2.address,
+        deployer.getAddress(),
         initOwnerBips,
         WEEK_SECS,
         DAY_SECS,
@@ -968,7 +1059,7 @@ describe("Vault", () => {
     // Helper to refresh the mock Supra price so withdrawals don't hit "oracle: stale"
     async function refreshOracle() {
       const latestBlock = await ethers.provider.getBlock("latest");
-      const ts = latestBlock!.timestamp;
+      const ts = latestBlock!.timestamp*1000;
       const price = BigNumber.from(10).pow(8);  // 1.0 * 1e8
       const dec = BigNumber.from(8)
       const scale = BigNumber.from(10).pow(dec);  // 1e8
@@ -1231,6 +1322,7 @@ describe("Vault", () => {
         ethers.constants.AddressZero, // ORACLE_BASE = HBAR
         token1.address,               // ORACLE_QUOTE = token1
         distributor.address,
+        deployer.getAddress(),
         initOwnerBips,
         WEEK_SECS,
         DAY_SECS,
@@ -1247,7 +1339,7 @@ describe("Vault", () => {
       const rawPrice = BigNumber.from(10).pow(ORACLE_DECIMALS_EXP); // 1.0 * 1e8
 
       async function refreshOracleNow() {
-        const ts = (await ethers.provider.getBlock("latest"))!.timestamp;
+        const ts = (await ethers.provider.getBlock("latest"))!.timestamp*1000;
         await mockSupra.setPriceInfo(
           PAIR_ID,
           [PAIR_ID],
@@ -1320,7 +1412,7 @@ describe("Vault", () => {
 
     async function setOraclePriceNow(rawPrice: BigNumber) {
       const latest = await ethers.provider.getBlock("latest");
-      const ts = latest!.timestamp;
+      const ts = latest!.timestamp*1000;
 
       await mockSupra.setPriceInfo(
         PAIR_ID,
@@ -1449,7 +1541,7 @@ describe("Vault", () => {
 
     async function refreshOracleToNowAtOneToOne() {
       const latestBlock = await ethers.provider.getBlock("latest");
-      const ts = latestBlock!.timestamp;
+      const ts = latestBlock!.timestamp*1000;
       await mockSupra.setPriceInfo(
         PAIR_ID,
         [PAIR_ID],        // pairs
@@ -1560,7 +1652,7 @@ describe("Vault", () => {
 
           // Refresh oracle so proof is not stale (1:1 price, same scale as in beforeEach)
           const latestBlock = await ethers.provider.getBlock("latest");
-          const nowTs = latestBlock!.timestamp;
+          const nowTs = latestBlock!.timestamp*1000;
           const dec = BigNumber.from(8)
           const price = BigNumber.from(10).pow(dec); // 1.0 * 1e8
           const scale = BigNumber.from(10).pow(dec); // 1e8
@@ -2209,7 +2301,7 @@ describe("Vault", () => {
   describe("airdrop rewards", () => {
     async function refreshOraclePrice1to1() {
       const latestBlock = await ethers.provider.getBlock("latest");
-      const ts = latestBlock!.timestamp;
+      const ts = latestBlock!.timestamp*1000;
 
       // Must match how you set it in beforeEach: price = scale for 1:1
       const dec = BigNumber.from(8)
@@ -3321,6 +3413,7 @@ describe("Vault", () => {
           token0.address,
           token1.address,
           distributor.address,
+          deployer.getAddress(),
           feeBips,
           WEEK_SECS,
           DAY_SECS,
@@ -3500,7 +3593,7 @@ describe("Vault", () => {
       const DEC = BigNumber.from(8)
       const ONE = BigNumber.from(10).pow(DEC); // 1e8
       const latest = await ethers.provider.getBlock("latest");
-      const ts = latest!.timestamp;
+      const ts = latest!.timestamp*1000;
 
       await mockSupra.setPriceInfo(
         1,
@@ -3767,7 +3860,7 @@ describe("Vault", () => {
       const DEC = BigNumber.from(8)
       const ONE = BigNumber.from(10).pow(DEC); // 1e8
       const latest = await ethers.provider.getBlock("latest");
-      const ts = latest!.timestamp;
+      const ts = latest!.timestamp*1000;
 
       await mockSupra.setPriceInfo(
         1,
@@ -3985,7 +4078,7 @@ describe("Vault", () => {
 
     async function refreshOracle1to1() {
       const latest = await ethers.provider.getBlock("latest");
-      const ts = latest!.timestamp;
+      const ts = latest!.timestamp*1000;
 
       // rawPrice = 1e8, scale = 1e8 => 1.0
       await mockSupra.setPriceInfo(

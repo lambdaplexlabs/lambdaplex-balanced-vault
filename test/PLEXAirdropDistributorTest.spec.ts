@@ -16,6 +16,8 @@ describe("AirdropDistributor", () => {
   let vault: PLEXPairVault;
 
   const INITIAL_MINT = 1_000_000_000;
+  const WEEK_SECS = 7 * 24 * 60 * 60;
+  const DAY_SECS = 24 * 60 * 60;
   const DECIMALS = 8;
   const ONE = BigNumber.from(10).pow(DECIMALS);
 
@@ -55,6 +57,18 @@ describe("AirdropDistributor", () => {
     // ---------- Deploy vault ----------
     // NOTE: We do not need to mock Supra here because these tests only use onAirdropFunded,
     // which doesn't touch the oracle (no deposits/withdrawals).
+
+    ethers.constants.AddressZero, // BASE = HBAR
+        token1.address,               // QUOTE = token1
+        ethers.constants.AddressZero, // ORACLE_BASE = HBAR
+        token1.address,               // ORACLE_QUOTE = token1
+        distributor.address,
+        deployer.getAddress(),
+        initOwnerBips,
+        WEEK_SECS,
+        DAY_SECS,
+        WEEK_SECS,
+        1000
     const VaultFactory = await ethers.getContractFactory("PLEXPairVault");
     vault = (await VaultFactory.deploy(
       token0.address,
@@ -62,7 +76,12 @@ describe("AirdropDistributor", () => {
       token0.address,
       token1.address,
       distributor.address,
-      initOwnerBips
+      deployer.getAddress(),
+      initOwnerBips,
+      WEEK_SECS,
+      DAY_SECS,
+      WEEK_SECS,        
+      1000
     )) as PLEXPairVault;
     await vault.deployed();
   });
@@ -377,7 +396,7 @@ describe("AirdropDistributor", () => {
 
       await expect(
         distributor.connect(alice).fund(goodVault.address, reward.address, amt)
-      ).to.be.revertedWith("ERC20: insufficient allowance");
+      ).to.be.revertedWith("TRANSFER_FROM_CALL_FAILED");
 
       // no credit
       expect(await distributor.credited(goodVault.address, reward.address)).to.equal(0);
