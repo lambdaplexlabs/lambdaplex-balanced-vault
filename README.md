@@ -88,4 +88,4 @@ npm install
 
 ## Licensing
 
-The primary license for Lambdaplex Order Hook is the MIT License (`MIT`).
+The primary license for Lambdaplex Balanced Vault is the MIT License (`MIT`).
