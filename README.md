@@ -4,7 +4,6 @@ Solidity smart contracts for the Lambdaplex “pair vault” system on Hedera EV
 - **`PLEXPairVault`** — single BASE/QUOTE vault with share-based accounting, inventory-aware deposits/withdrawals, streaming airdrop rewards, management fee accrual via share-minting, and emergency mode.
 - **`AirdropDistributor`** — custody + accounting for reward tokens, and pays user claims on behalf of vaults.
 - **`SupraRegistry`** (adapter) — wraps a Supra feed contract to provide `getPair()` + `verifyOracleProofV2()` using Hedera/HIP conventions.
-- **`PLEXVaultHook`** (hook) — the Hiero Hook installed to the smart contract at deployment time or with the Hedera admin key
 - **Mocks** — `MockSupraPriceFeed`, `ERC20Mock`, etc. for unit tests.
 
 > ⚠️ This repo is intended for audit and production deployment review. Always run the full test suite and review the security assumptions below before deploying.
@@ -15,8 +14,8 @@ Solidity smart contracts for the Lambdaplex “pair vault” system on Hedera EV
 
 ### 1) PLEXPairVault (single pair vault)
 A vault holds two assets:
-- **BASE**: ERC-20 or native HBAR (`address(0)`)
-- **QUOTE**: ERC-20 or native HBAR (`address(0)`)
+- **BASE**: HTS or native HBAR (`address(0)`)
+- **QUOTE**: HTS or native HBAR (`address(0)`)
 
 Users deposit assets and receive **shares**. Shares represent a pro-rata claim on the vault’s inventory **by QUOTE-value**, based on an oracle price.
 
